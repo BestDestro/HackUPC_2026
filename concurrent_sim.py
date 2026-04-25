@@ -537,3 +537,286 @@ def run_concurrent_from_csv(csv_path: str, num_incoming: int = 1000,
 
     metrics["real_compute_time"] = f"{real_time:.2f}s"
     return metrics
+
+
+def run_continuous(csv_path: str, duration_hours: float = 8.0,
+                   num_destinations: int = 20,
+                   arrival_rate: int = BOX_ARRIVAL_RATE,
+                   seed: int = 42,
+                   verbose: bool = True) -> dict:
+    """
+    CONTINUOUS FLOW simulation — the real operational scenario.
+
+    Boxes arrive at `arrival_rate` per hour, NON-STOP, for `duration_hours`.
+    The system must maintain equilibrium: extract pallets fast enough that
+    the silo never fills up. If occupancy hits ~90%, the system is failing.
+
+    Unlike run_concurrent_from_csv (fixed N boxes), here:
+      - Boxes are generated ON-THE-FLY as sim_time advances
+      - The loop runs until sim_time >= duration_seconds
+      - Final output phase drains any remaining full pallets after cutoff
+
+    Args:
+        csv_path: CSV file with initial silo state.
+        duration_hours: How many hours to simulate (default 8h = one shift).
+        num_destinations: How many destinations to use.
+        arrival_rate: Boxes per hour (default 1000).
+        seed: Random seed for reproducibility.
+        verbose: Print progress.
+
+    Returns:
+        Metrics dict including snapshots for dashboard.
+    """
+    import random
+    random.seed(seed)
+
+    interval = 3600.0 / arrival_rate  # seconds between boxes
+    duration_secs = duration_hours * 3600.0
+    total_expected = int(duration_hours * arrival_rate)
+
+    if verbose:
+        print(f"\n{'='*70}")
+        print(f"  CONTINUOUS FLOW — REAL SCENARIO")
+        print(f"  Initial state: {csv_path}")
+        print(f"  Duration: {duration_hours:.1f}h ({duration_secs:.0f}s)")
+        print(f"  Arrival rate: {arrival_rate} boxes/hour ({interval:.1f}s interval)")
+        print(f"  Expected total boxes: ~{total_expected:,}")
+        print(f"  Silo capacity: 7,680 slots")
+        print(f"  CRITICAL: system must stay in equilibrium!")
+        print(f"{'='*70}")
+
+    # ── Initialize ────────────────────────────────────────────────────────────
+    silo = Silo()
+    shuttle_mgr = ShuttleManager()
+    manager = ConcurrentManager(silo, shuttle_mgr)
+
+    if verbose:
+        print(f"\n--- Loading initial silo state ---")
+
+    result = load_silo_from_csv(csv_path, silo)
+    all_boxes = result["all_boxes"]
+    stats = result["stats"]
+    manager.all_boxes.update(all_boxes)
+    manager.boxes_stored = stats["loaded"]
+    existing_dests = list(set(b.destination for b in all_boxes.values()))
+
+    if verbose:
+        print(f"  Pre-loaded: {stats['loaded']} boxes ({silo.occupancy_rate:.1%} occupancy)")
+        print(f"  Available destinations: {len(existing_dests)}")
+
+    source = "3055769"
+    box_counter = 0           # sequential counter for box IDs
+    next_arrival_time = 0.0   # next box arrival in sim-seconds
+    pending_input: List[Box] = []
+
+    # State tracking
+    sim_time = 0.0
+    last_snapshot = -999.0
+    last_print = -1
+    tick = 0
+    start_real = time_module.time()
+
+    # Overload tracking
+    overload_events: List[dict] = []
+    peak_occupancy = silo.occupancy_rate
+
+    # ── Main Loop ─────────────────────────────────────────────────────────────
+    # Phase 1: Run until duration is reached (continuous input)
+    input_active = True
+
+    while True:
+        # Determine next event time
+        candidates = []
+        if input_active and next_arrival_time <= duration_secs:
+            candidates.append(next_arrival_time)
+
+        busy = [ft for ft in manager.shuttle_free_at.values() if ft > sim_time]
+        if busy:
+            candidates.append(min(busy))
+
+        if not candidates:
+            # No more arrivals and no busy shuttles
+            if not pending_input and not manager.active_pallets:
+                break
+            candidates.append(sim_time + 0.1)
+
+        sim_time = min(candidates)
+        manager.sim_time = sim_time
+
+        # Stop generating new boxes once duration is reached
+        if sim_time > duration_secs:
+            input_active = False
+
+        # Generate all boxes that have arrived up to sim_time
+        if input_active:
+            while next_arrival_time <= sim_time and next_arrival_time <= duration_secs:
+                dest = random.choice(existing_dests[:num_destinations])
+                box_id = f"{source}{dest}{box_counter:05d}"
+                box = Box.from_id(box_id)
+                manager.all_boxes[box_id] = box
+                pending_input.append(box)
+                box_counter += 1
+                next_arrival_time += interval
+
+        # Update pallets
+        manager._update_pallets()
+
+        # Assign free shuttles (prioritize: output if silo > 50%, else balance)
+        occupancy = silo.occupancy_rate
+        peak_occupancy = max(peak_occupancy, occupancy)
+
+        # Overload alert
+        if occupancy > 0.85:
+            overload_events.append({'time': sim_time, 'occupancy': occupancy})
+
+        actions_taken = True
+        while actions_taken:
+            actions_taken = False
+
+            # Priority: if silo filling up (>60%), prioritize output over input
+            if occupancy > 0.60 and manager.active_pallets:
+                pick = manager._pick_best_retrieval(sim_time)
+                if pick:
+                    box, pallet = pick
+                    pos = box.position
+                    key = (pos.aisle, pos.y)
+                    if manager.shuttle_free_at[key] <= sim_time:
+                        manager._execute_retrieve(box, sim_time)
+                        pallet.retrieved.append(box)
+                        actions_taken = True
+
+            # Store pending input boxes
+            stored_boxes = []
+            for box in pending_input:
+                pos = manager._find_best_store_position(box, sim_time)
+                if pos:
+                    key = (pos.aisle, pos.y)
+                    if manager.shuttle_free_at[key] <= sim_time:
+                        manager._execute_store(box, pos, sim_time)
+                        stored_boxes.append(box)
+                        actions_taken = True
+            for b in stored_boxes:
+                pending_input.remove(b)
+
+            # Retrieve pallet boxes (normal priority)
+            manager._update_pallets()
+            if manager.active_pallets:
+                pick = manager._pick_best_retrieval(sim_time)
+                if pick:
+                    box, pallet = pick
+                    pos = box.position
+                    key = (pos.aisle, pos.y)
+                    if manager.shuttle_free_at[key] <= sim_time:
+                        manager._execute_retrieve(box, sim_time)
+                        pallet.retrieved.append(box)
+                        actions_taken = True
+
+        # Snapshot every 60 sim-seconds (more granular for continuous mode)
+        if sim_time - last_snapshot >= 60:
+            manager._take_snapshot(pending_input)
+            last_snapshot = sim_time
+
+        # Progress every 30 min of sim time
+        if verbose:
+            elapsed_min = int(sim_time / 60)
+            if elapsed_min > last_print and elapsed_min % 30 == 0:
+                last_print = elapsed_min
+                phase = "INPUT+OUTPUT" if input_active else "OUTPUT DRAIN"
+                warn = " [!OVERLOAD!]" if occupancy > 0.85 else ""
+                print(f"  t={sim_time:>7.0f}s ({elapsed_min:>4}min) [{phase}] | "
+                      f"arrived={box_counter:>5} stored={manager.boxes_stored:>5} "
+                      f"pending={len(pending_input):>3} "
+                      f"pallets={len(manager.completed_pallets):>4} "
+                      f"occ={occupancy:.1%}{warn}")
+
+        # Termination check (post-duration drain)
+        if not input_active:
+            no_pending = len(pending_input) == 0
+            no_active = len(manager.active_pallets) == 0
+            no_eligible = len(silo.get_destinations_with_enough_boxes(12)) == 0
+            all_free = all(ft <= sim_time for ft in manager.shuttle_free_at.values())
+            if no_pending and no_active and no_eligible and all_free:
+                break
+
+        # Advance time if stuck
+        if not actions_taken:
+            next_events = []
+            if input_active and next_arrival_time <= duration_secs:
+                next_events.append(next_arrival_time)
+            busy = [ft for ft in manager.shuttle_free_at.values() if ft > sim_time]
+            if busy:
+                next_events.append(min(busy))
+            if next_events:
+                sim_time = min(next_events)
+                manager.sim_time = sim_time
+            else:
+                break
+
+        tick += 1
+        if tick > 2_000_000:
+            if verbose:
+                print("  WARNING: Safety break at 2M ticks")
+            break
+
+    real_elapsed = time_module.time() - start_real
+    manager._update_pallets()
+    manager._take_snapshot(pending_input)
+
+    # ── Final Metrics ─────────────────────────────────────────────────────────
+    pallets_done = len(manager.completed_pallets)
+    shuttle_times = list(manager.shuttle_free_at.values())
+    max_stime = max(shuttle_times)
+    avg_stime = sum(shuttle_times) / len(shuttle_times)
+
+    # Throughput rate
+    effective_hours = sim_time / 3600
+    pallets_per_hour = pallets_done / effective_hours if effective_hours > 0 else 0
+    boxes_per_hour_out = manager.boxes_retrieved / effective_hours if effective_hours > 0 else 0
+
+    metrics = {
+        "mode": "continuous",
+        "duration_hours": duration_hours,
+        "sim_time_hours": f"{sim_time/3600:.2f}h",
+        "boxes_generated": box_counter,
+        "boxes_stored": manager.boxes_stored,
+        "boxes_retrieved": manager.boxes_retrieved,
+        "boxes_pending_final": len(pending_input),
+        "pallets_completed": pallets_done,
+        "pallets_per_hour": f"{pallets_per_hour:.1f}",
+        "boxes_out_per_hour": f"{boxes_per_hour_out:.0f}",
+        "full_pallet_pct": f"{(pallets_done * 12 / max(manager.boxes_stored, 1)) * 100:.1f}%",
+        "total_relocations": manager.total_relocations,
+        "peak_occupancy": f"{peak_occupancy:.1%}",
+        "final_occupancy": f"{silo.occupancy_rate:.1%}",
+        "remaining_in_silo": silo.occupied_count,
+        "overload_events": len(overload_events),
+        "shuttle_max_time": f"{max_stime:.1f}s",
+        "shuttle_avg_time": f"{avg_stime:.1f}s",
+        "snapshots": manager.snapshots,
+    }
+
+    if verbose:
+        print(f"\n{'='*70}")
+        print(f"  CONTINUOUS SIMULATION COMPLETE")
+        print(f"{'='*70}")
+        print(f"  Duration simulated:    {sim_time/3600:.2f}h ({sim_time:.0f}s)")
+        print(f"  Boxes generated:       {box_counter:,}")
+        print(f"  Boxes stored:          {manager.boxes_stored:,}")
+        print(f"  Boxes retrieved:       {manager.boxes_retrieved:,}")
+        print(f"  Pallets completed:     {pallets_done:,}")
+        print(f"  Pallets/hour:          {pallets_per_hour:.1f}")
+        print(f"  Boxes out/hour:        {boxes_per_hour_out:.0f}")
+        print(f"  Peak occupancy:        {peak_occupancy:.1%}")
+        print(f"  Final occupancy:       {silo.occupancy_rate:.1%}")
+        print(f"  Overload events (>85%):{len(overload_events)}")
+        print(f"  Total relocations:     {manager.total_relocations:,}")
+        print(f"  Real compute time:     {real_elapsed:.2f}s")
+        if overload_events:
+            print(f"\n  [!] OVERLOAD DETECTED at {len(overload_events)} moments!")
+            print(f"      First at t={overload_events[0]['time']:.0f}s "
+                  f"({overload_events[0]['occupancy']:.1%} occ)")
+        else:
+            print(f"\n  [OK] System stayed in equilibrium throughout")
+
+    metrics["real_compute_time"] = f"{real_elapsed:.2f}s"
+    return metrics

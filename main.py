@@ -12,7 +12,8 @@ Modes:
 import sys
 import os
 from simulation import run_scenario, run_from_csv
-from concurrent_sim import run_concurrent_from_csv
+from concurrent_sim import run_concurrent_from_csv, run_continuous
+
 
 
 def print_comparison(results: dict):
@@ -81,6 +82,20 @@ def main():
         run_concurrent_from_csv(csv_path, num_incoming=num_incoming, verbose=True)
         return
 
+    # CONTINUOUS MODE: python main.py continuous <csv> [hours] [rate]
+    if len(sys.argv) >= 2 and sys.argv[1].lower() == "continuous":
+        csv_path = sys.argv[2] if len(sys.argv) >= 3 else "silo-semi-empty.csv"
+        duration_hours = float(sys.argv[3]) if len(sys.argv) >= 4 else 8.0
+        arrival_rate = int(sys.argv[4]) if len(sys.argv) >= 5 else 1000
+
+        if not os.path.exists(csv_path):
+            print(f"ERROR: CSV file not found: {csv_path}")
+            sys.exit(1)
+
+        run_continuous(csv_path, duration_hours=duration_hours,
+                       arrival_rate=arrival_rate, verbose=True)
+        return
+
     # CSV EXTRACT-ONLY MODE: python main.py csv <file>
     if len(sys.argv) >= 2 and sys.argv[1].lower() == "csv":
         csv_path = sys.argv[2] if len(sys.argv) >= 3 else "silo-semi-empty.csv"
@@ -103,11 +118,13 @@ def main():
                 sys.exit(1)
         except ValueError:
             print(f"Usage:")
-            print(f"  python main.py                         # All synthetic")
-            print(f"  python main.py 20                      # Single synthetic")
-            print(f"  python main.py csv <file>              # Extract-only from CSV")
-            print(f"  python main.py concurrent <csv> [N]    # Concurrent I/O")
+            print(f"  python main.py                              # All synthetic")
+            print(f"  python main.py 20                           # Single synthetic")
+            print(f"  python main.py csv <file>                   # Extract-only from CSV")
+            print(f"  python main.py concurrent <csv> [N]         # Concurrent I/O (N boxes)")
+            print(f"  python main.py continuous <csv> [hours] [rate]  # REAL steady-state flow")
             sys.exit(1)
+
 
     results = {}
     for num_dest in scenarios:
