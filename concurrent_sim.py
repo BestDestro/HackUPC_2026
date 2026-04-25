@@ -24,9 +24,34 @@ BOX_INTERVAL = 3600.0 / BOX_ARRIVAL_RATE  # ~3.6 seconds
 
 
 def build_algorithms(config_name: str):
-    from algorithms.storage import GreedyStorage, DestinationGroupedStorage, BalancedStorage
-    from algorithms.pallet_selection import CheapestPalletFirst, LeastBlockedPalletFirst, MostBoxesFirst
-    from algorithms.retrieval import CheapestBoxFirst, FinishPalletFirstRetrieval
+    from algorithms.storage import (
+        AisleSpreadStorage,
+        BalancedStorage,
+        DenseLaneStorage,
+        DestinationGroupedStorage,
+        GreedyStorage,
+        NearestHeadStorage,
+        RetrievalFriendlyStorage,
+    )
+    from algorithms.pallet_selection import (
+        CheapestPalletFirst,
+        HighestDensityPalletFirst,
+        LeastBlockedPalletFirst,
+        MinRelocationRiskPalletFirst,
+        MostBoxesFirst,
+        ScarcityAwarePalletFirst,
+        ShuttleBalancedPalletFirst,
+        ThroughputPalletFirst,
+    )
+    from algorithms.retrieval import (
+        CheapestBoxFirst,
+        DepthAwareRetrieval,
+        FinishPalletFirstRetrieval,
+        PalletBatchRetrieval,
+        RelocationOpportunisticRetrieval,
+        ShuttleReadyRetrieval,
+        UnblockedFirstRetrieval,
+    )
 
     configs = {
         "baseline": (
@@ -59,6 +84,46 @@ def build_algorithms(config_name: str):
             MostBoxesFirst(),
             CheapestBoxFirst(),
         ),
+        "nearest_head": (
+            NearestHeadStorage(),
+            ThroughputPalletFirst(),
+            ShuttleReadyRetrieval(),
+        ),
+        "spread_unblocked": (
+            AisleSpreadStorage(),
+            MinRelocationRiskPalletFirst(),
+            UnblockedFirstRetrieval(),
+        ),
+        "retrieval_friendly": (
+            RetrievalFriendlyStorage(),
+            MinRelocationRiskPalletFirst(),
+            DepthAwareRetrieval(),
+        ),
+        "dense_batch": (
+            DenseLaneStorage(),
+            HighestDensityPalletFirst(),
+            PalletBatchRetrieval(),
+        ),
+        "balanced_ready": (
+            BalancedStorage(),
+            ShuttleBalancedPalletFirst(),
+            ShuttleReadyRetrieval(),
+        ),
+        "opportunistic": (
+            DestinationGroupedStorage(),
+            HighestDensityPalletFirst(),
+            RelocationOpportunisticRetrieval(),
+        ),
+        "scarcity_depth": (
+            RetrievalFriendlyStorage(),
+            ScarcityAwarePalletFirst(),
+            DepthAwareRetrieval(),
+        ),
+        "throughput": (
+            AisleSpreadStorage(),
+            ThroughputPalletFirst(),
+            CheapestBoxFirst(),
+        ),
     }
 
     if config_name not in configs:
@@ -68,6 +133,25 @@ def build_algorithms(config_name: str):
         )
 
     return configs[config_name]
+
+
+def available_algorithm_configs() -> list[str]:
+    return [
+        "baseline",
+        "least_blocked",
+        "grouped",
+        "grouped_blocked",
+        "balanced",
+        "most_boxes",
+        "nearest_head",
+        "spread_unblocked",
+        "retrieval_friendly",
+        "dense_batch",
+        "balanced_ready",
+        "opportunistic",
+        "scarcity_depth",
+        "throughput",
+    ]
 
 
 class ConcurrentManager:
@@ -245,7 +329,7 @@ class ConcurrentManager:
         chosen_destinations = self.pallet_algorithm.choose_destinations(self, slots)
 
         for dest in chosen_destinations:
-            ids = list(self.silo.get_boxes_for_destination(dest))[:BOXES_PER_PALLET]
+            ids = sorted(self.silo.get_boxes_for_destination(dest))[:BOXES_PER_PALLET]
             boxes = [self.all_boxes[bid] for bid in ids]
             self.active_pallets.append(Pallet(destination=dest, boxes=boxes, reserved=True))
 
@@ -490,7 +574,8 @@ def run_concurrent_from_csv(
         pallet_algorithm=pallet_alg,
         retrieval_algorithm=retrieval_alg,
     )
-    print(f"  Algorithm config: {algorithm_config}")
+    if verbose:
+        print(f"  Algorithm config: {algorithm_config}")
     # Load CSV
     if verbose:
         print(f"\n--- Loading initial silo state ---")
@@ -508,7 +593,7 @@ def run_concurrent_from_csv(
         print(f"  Destinations ready: {len(ready)}")
 
     # Get existing destinations from silo
-    existing_dests = list(set(b.destination for b in all_boxes.values()))
+    existing_dests = sorted(set(b.destination for b in all_boxes.values()))
 
     # Generate incoming boxes using the same destinations
     if verbose:
@@ -536,6 +621,9 @@ def run_concurrent_from_csv(
     if verbose:
         print(f"\n--- FINAL CONCURRENT METRICS ---")
         for k, v in metrics.items():
+            if k == "snapshots":
+                print(f"  {'Snapshots':<25} {len(v)}")
+                continue
             label = k.replace('_', ' ').title()
             print(f"  {label:<25} {v}")
         print(f"  {'Real Compute Time':<25} {real_time:.2f}s")
@@ -612,7 +700,7 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
     stats = result["stats"]
     manager.all_boxes.update(all_boxes)
     manager.boxes_stored = stats["loaded"]
-    existing_dests = list(set(b.destination for b in all_boxes.values()))
+    existing_dests = sorted(set(b.destination for b in all_boxes.values()))
 
     if verbose:
         print(f"  Pre-loaded: {stats['loaded']} boxes ({silo.occupancy_rate:.1%} occupancy)")
