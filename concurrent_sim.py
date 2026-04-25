@@ -23,14 +23,77 @@ BOX_ARRIVAL_RATE = 1000  # boxes per hour
 BOX_INTERVAL = 3600.0 / BOX_ARRIVAL_RATE  # ~3.6 seconds
 
 
+def build_algorithms(config_name: str):
+    from algorithms.storage import GreedyStorage, DestinationGroupedStorage, BalancedStorage
+    from algorithms.pallet_selection import CheapestPalletFirst, LeastBlockedPalletFirst, MostBoxesFirst
+    from algorithms.retrieval import CheapestBoxFirst, FinishPalletFirstRetrieval
+
+    configs = {
+        "baseline": (
+            GreedyStorage(),
+            CheapestPalletFirst(),
+            CheapestBoxFirst(),
+        ),
+        "least_blocked": (
+            GreedyStorage(),
+            LeastBlockedPalletFirst(),
+            CheapestBoxFirst(),
+        ),
+        "grouped": (
+            DestinationGroupedStorage(),
+            CheapestPalletFirst(),
+            CheapestBoxFirst(),
+        ),
+        "grouped_blocked": (
+            DestinationGroupedStorage(),
+            LeastBlockedPalletFirst(),
+            CheapestBoxFirst(),
+        ),
+        "balanced": (
+            BalancedStorage(),
+            LeastBlockedPalletFirst(),
+            FinishPalletFirstRetrieval(),
+        ),
+        "most_boxes": (
+            GreedyStorage(),
+            MostBoxesFirst(),
+            CheapestBoxFirst(),
+        ),
+    }
+
+    if config_name not in configs:
+        raise ValueError(
+            f"Unknown algorithm_config '{config_name}'. "
+            f"Choose one of: {list(configs.keys())}"
+        )
+
+    return configs[config_name]
+
+
 class ConcurrentManager:
     """
     Event-driven manager that interleaves INPUT and OUTPUT operations.
     Each shuttle has a busy_until timestamp; tasks are only assigned
     to shuttles that are free at the current simulation time.
     """
+    
+    def __init__(
+        self,
+        silo: Silo,
+        shuttle_mgr: ShuttleManager,
+        storage_algorithm=None,
+        pallet_algorithm=None,
+        retrieval_algorithm=None,
+    ):
+        from algorithms.storage import GreedyStorage
+        from algorithms.pallet_selection import CheapestPalletFirst
+        from algorithms.retrieval import CheapestBoxFirst
 
-    def __init__(self, silo: Silo, shuttle_mgr: ShuttleManager):
+        self.storage_algorithm = storage_algorithm or GreedyStorage()
+        self.pallet_algorithm = pallet_algorithm or CheapestPalletFirst()
+        self.retrieval_algorithm = retrieval_algorithm or CheapestBoxFirst()
+        
+
         self.silo = silo
         self.shuttle_mgr = shuttle_mgr
 
@@ -65,7 +128,6 @@ class ConcurrentManager:
         # Snapshots for dashboard visualization
         self.snapshots: List[dict] = []
         self._last_snapshot_time = -999.0
-
     # =========================================================================
     # SHUTTLE HELPERS
     # =========================================================================
@@ -159,41 +221,7 @@ class ConcurrentManager:
     # =========================================================================
 
     def _find_best_store_position(self, box: Box, t: float) -> Optional[Position]:
-        """Find best position for storing a box, preferring free shuttles."""
-        dest_per_aisle = defaultdict(int)
-        for bid in self.silo.get_boxes_for_destination(box.destination):
-            p = self.silo.get_box_position(bid)
-            if p:
-                dest_per_aisle[p.aisle] += 1
-
-        best = None
-        best_score = float('inf')
-
-        for aisle in range(1, NUM_AISLES + 1):
-            for y in range(1, NUM_Y + 1):
-                key = (aisle, y)
-                available = self.silo.get_available_positions_for_shuttle(aisle, y)
-                if not available:
-                    continue
-
-                pos = min(available, key=lambda p: (p.x, p.z))
-                cur_x = self.shuttle_x[key]
-
-                # Time cost
-                wait = max(0, self.shuttle_free_at[key] - t)
-                cycle = self._shuttle_move_cost(key, cur_x, 0) + \
-                        self._shuttle_move_cost(key, 0, pos.x)
-
-                # Scoring
-                z_pen = 0 if pos.z == 1 else 15
-                group_bonus = -min(dest_per_aisle.get(aisle, 0) * 2, 10)
-                score = wait + cycle + z_pen + pos.x * 0.3 + group_bonus
-
-                if score < best_score:
-                    best_score = score
-                    best = pos
-
-        return best
+        return self.storage_algorithm.choose_position(self, box, t)
 
     # =========================================================================
     # PALLET MANAGEMENT
@@ -214,51 +242,15 @@ class ConcurrentManager:
         if slots <= 0:
             return
 
-        active_dests = {p.destination for p in self.active_pallets}
-        eligible = [d for d in self.silo.get_destinations_with_enough_boxes(BOXES_PER_PALLET)
-                    if d not in active_dests]
+        chosen_destinations = self.pallet_algorithm.choose_destinations(self, slots)
 
-        # Score by retrieval cost
-        scored = []
-        for dest in eligible:
-            ids = list(self.silo.get_boxes_for_destination(dest))[:BOXES_PER_PALLET]
-            cost = 0
-            for bid in ids:
-                p = self.silo.get_box_position(bid)
-                if p:
-                    cost += HANDLING_TIME + p.x + HANDLING_TIME + p.x
-                    if self.silo.is_blocked(p):
-                        cost += 40
-            scored.append((dest, cost))
-        scored.sort(key=lambda x: x[1])
-
-        for dest, _ in scored[:slots]:
+        for dest in chosen_destinations:
             ids = list(self.silo.get_boxes_for_destination(dest))[:BOXES_PER_PALLET]
             boxes = [self.all_boxes[bid] for bid in ids]
             self.active_pallets.append(Pallet(destination=dest, boxes=boxes, reserved=True))
 
-    def _pick_best_retrieval(self, t: float) -> Optional[Tuple[Box, 'Pallet']]:
-        """Pick the cheapest box to retrieve across all active pallets."""
-        best = None
-        best_cost = float('inf')
-
-        for pallet in self.active_pallets:
-            for box in pallet.boxes:
-                if box in pallet.retrieved or box.position is None:
-                    continue
-                pos = box.position
-                key = (pos.aisle, pos.y)
-                cur_x = self.shuttle_x[key]
-                wait = max(0, self.shuttle_free_at[key] - t)
-                cost = wait + self._shuttle_move_cost(key, cur_x, pos.x) + \
-                       self._shuttle_move_cost(key, pos.x, 0)
-                if self.silo.is_blocked(pos):
-                    cost += 40
-                if cost < best_cost:
-                    best_cost = cost
-                    best = (box, pallet)
-
-        return best
+    def _pick_best_retrieval(self, t: float):
+        return self.retrieval_algorithm.choose_box(self, t)
 
     # =========================================================================
     # MAIN SIMULATION LOOP
@@ -461,9 +453,13 @@ class ConcurrentManager:
         }
 
 
-def run_concurrent_from_csv(csv_path: str, num_incoming: int = 1000,
-                            num_destinations: int = 20,
-                            verbose: bool = True) -> dict:
+def run_concurrent_from_csv(
+    csv_path: str,
+    num_incoming: int = 1000,
+    num_destinations: int = 20,
+    algorithm_config: str = "baseline",
+    verbose: bool = True,
+):
     """
     Run concurrent simulation:
     1. Load initial silo from CSV.
@@ -484,8 +480,17 @@ def run_concurrent_from_csv(csv_path: str, num_incoming: int = 1000,
     # Initialize
     silo = Silo()
     shuttle_mgr = ShuttleManager()
-    manager = ConcurrentManager(silo, shuttle_mgr)
 
+    storage_alg, pallet_alg, retrieval_alg = build_algorithms(algorithm_config)
+
+    manager = ConcurrentManager(
+        silo,
+        shuttle_mgr,
+        storage_algorithm=storage_alg,
+        pallet_algorithm=pallet_alg,
+        retrieval_algorithm=retrieval_alg,
+    )
+    print(f"  Algorithm config: {algorithm_config}")
     # Load CSV
     if verbose:
         print(f"\n--- Loading initial silo state ---")
@@ -542,6 +547,7 @@ def run_concurrent_from_csv(csv_path: str, num_incoming: int = 1000,
 def run_continuous(csv_path: str, duration_hours: float = 8.0,
                    num_destinations: int = 20,
                    arrival_rate: int = BOX_ARRIVAL_RATE,
+                   algorithm_config: str = "baseline",
                    seed: int = 42,
                    verbose: bool = True) -> dict:
     """
@@ -588,8 +594,16 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
     # ── Initialize ────────────────────────────────────────────────────────────
     silo = Silo()
     shuttle_mgr = ShuttleManager()
-    manager = ConcurrentManager(silo, shuttle_mgr)
 
+    storage_alg, pallet_alg, retrieval_alg = build_algorithms(algorithm_config)
+
+    manager = ConcurrentManager(
+        silo,
+        shuttle_mgr,
+        storage_algorithm=storage_alg,
+        pallet_algorithm=pallet_alg,
+        retrieval_algorithm=retrieval_alg,
+    )
     if verbose:
         print(f"\n--- Loading initial silo state ---")
 
