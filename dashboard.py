@@ -134,6 +134,7 @@ def run_simulation(csv_path, num_incoming, num_destinations, seed, algorithm_con
     # Get existing destinations
     existing_dests = sorted(set(b.destination for b in all_boxes.values()))
 
+    # Generate incoming boxes
     incoming = []
     source = "3055769"
     for i in range(num_incoming):
@@ -142,9 +143,9 @@ def run_simulation(csv_path, num_incoming, num_destinations, seed, algorithm_con
         box_id = f"{source}{dest}{bulk:05d}"
         incoming.append(Box.from_id(box_id))
 
+    # Run
     metrics = manager.run(incoming, verbose=False)
     return metrics
-
 
 
 TRACE_COLORS = {
@@ -586,19 +587,17 @@ def extract_selected_shuttle(plotly_state):
 with st.sidebar:
     st.markdown("### Simulation Parameters")
 
-    sim_mode = st.radio("Operation Mode", ["Concurrent (Finite)", "Continuous (Infinite Flow)"])
-    algo_mode = st.radio("Algorithm Strategy", ["Optimized (Parallel + Lookahead)", "Naive (Legacy)"])
-
     csv_path = st.text_input("CSV File", value="silo-semi-empty.csv")
-    num_destinations = st.slider("Destinations", 5, 80, 20)
     num_incoming = st.slider("Incoming Boxes", 200, 5000, 1000, step=100)
+    num_destinations = st.slider("Destinations", 5, 80, 20)
     algorithm_config = st.selectbox(
         "Algorithm",
         available_algorithm_configs(),
         index=available_algorithm_configs().index("nearest_head"),
     )
     seed = st.number_input("Random Seed", value=42, step=1)
-    playback_speed = st.slider("Playback Speed", 1, 50, 10, help="Snapshots per second during playback")
+    playback_speed = st.slider("Playback Speed", 1, 50, 10,
+                                help="Snapshots per second during playback")
 
     st.markdown("---")
     run_btn = st.button("Run Simulation", type="primary", use_container_width=True)
@@ -788,21 +787,21 @@ st.markdown("---")
 
 col1, col2 = st.columns(2)
 with col1:
-    st.plotly_chart(build_throughput_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_throughput_chart(df_up_to), use_container_width=True)
 with col2:
-    st.plotly_chart(build_occupancy_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_occupancy_chart(df_up_to), use_container_width=True)
 
 col3, col4 = st.columns(2)
 with col3:
-    st.plotly_chart(build_pallets_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_pallets_chart(df_up_to), use_container_width=True)
 with col4:
-    st.plotly_chart(build_aisle_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_aisle_chart(df_up_to), use_container_width=True)
 
 col5, col6 = st.columns(2)
 with col5:
-    st.plotly_chart(build_shuttle_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_shuttle_chart(df_up_to), use_container_width=True)
 with col6:
-    st.plotly_chart(build_pending_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_pending_chart(df_up_to), use_container_width=True)
 
 
 # ROUTE ZOOM

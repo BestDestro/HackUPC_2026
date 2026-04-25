@@ -1,75 +1,92 @@
-# 📦 Hack the Flow - 3D Logistics Simulator
+# Hack the Flow
 
-![HackUPC 2026](https://img.shields.io/badge/Event-HackUPC%_2026-blueviolet)
-![Status](https://img.shields.io/badge/Status-Steady_State_Reached-success)
-![Throughput](https://img.shields.io/badge/Throughput-%3E1500_boxes%2Fhr-brightgreen)
+Real-time warehouse flow optimizer that schedules 32 shuttles to store, retrieve, and relocate boxes efficiently in automated silos.
 
-Este repositorio contiene la solución algorítmica para el reto **Hack the Flow**, que consiste en la simulación y optimización del tráfico de un silo logístico automatizado 3D con capacidad para 7.680 cajas, gestionado por 32 shuttles robóticos.
+## Inspiration
 
-## 🧠 Evolución Algorítmica: Del Caos al Steady-State
+We were inspired by automated warehouses and the challenge of keeping thousands of boxes moving without creating bottlenecks. We wanted to optimize how boxes enter and leave a silo using 32 shuttles working at the same time.
 
-Durante el desarrollo, nos dimos cuenta de que la dificultad del reto no era solo almacenar cajas, sino **sostener un flujo continuo (1000 cajas/hora) sin colapsar**. Por ello, desarrollamos y enfrentamos dos estrategias distintas:
+## What it does
 
-### 1. El Enfoque "Naive" (Por qué empezamos por aquí)
-Todo sistema logístico parte de la intuición humana básica. Inicialmente, nuestro algoritmo se basaba en las reglas más obvias:
-*   **Esperar al pallet perfecto:** No preparar un pallet de salida hasta tener *exactamente* 12 cajas del mismo destino en el almacén.
-*   **Extracción secuencial:** Un shuttle saca una caja. Cuando termina, otro shuttle saca la siguiente.
-*   **Prioridad a la entrada:** Solo se vacía el almacén cuando este supera el 50% de ocupación.
+Hack the Flow simulates an automated warehouse silo with 7,680 positions and 32 shuttles. It decides where to store incoming boxes, which boxes to retrieve, when to relocate blocked boxes, and how to complete pallets efficiently.
 
-**El Problema:** Este modelo es un cuello de botella letal. Al simular un flujo continuo de 1000 cajas/hora, el sistema es incapaz de dar salida al mismo ritmo. La ocupación se dispara por encima del 85% y el almacén revienta.
+It also includes a dashboard to visualize shuttle movement, warehouse metrics, algorithm performance, and an AI assistant that explains what is happening in the simulation.
 
-### 2. El Enfoque Optimizado (La Solución Final)
-Para alcanzar un *Steady-State* (equilibrio perfecto donde Salidas ≥ Entradas), rediseñamos el motor con cuatro pilares:
+## How we built it
 
-1.  **State Management O(1):** Sustituimos las búsquedas matriciales por *Hash Maps* (`dict` y `set` en Python) para ubicar cualquier caja en tiempo $O(1)$, bajando el tiempo de cómputo de 14 minutos a **2.7 segundos**.
-2.  **Lookahead Dinámico (Anticipación):** En lugar de esperar a tener 12 cajas, el sistema "activa" pallets en los docks de salida en cuanto un destino alcanza **8 cajas**. Esto permite que los shuttles empiecen a extraer cajas *mientras* el resto siguen llegando, solapando tiempos muertos.
-3.  **Paralelización Masiva (Multi-Shuttle):** Implementamos un planificador *Round-Robin* que asigna tareas a los **32 shuttles simultáneamente**. Si hay trabajo por hacer, ningún robot se queda inactivo (Idle).
-4.  **Prioridad Competitiva:** Eliminamos el bloqueo por ocupación. Ahora, la extracción compite en igualdad de condiciones con el almacenamiento.
+We built the simulator in Python. The silo is represented as a grid of aisles, sides, X positions, Y levels, and Z depth. We used dictionaries and hash maps to quickly find boxes, free positions, and destinations.
 
-### 📊 Comparativa de Rendimiento (Test de Estrés 2 Horas)
+We created algorithms for chaotic storage, greedy retrieval, pallet selection, relocation, and concurrent shuttle scheduling. The dashboard was built with Streamlit and Plotly, and we used the Gemma API to explain simulation decisions.
 
-| Métrica | Naive (Legacy) | Optimized (Nuestro Algoritmo) |
-| :--- | :--- | :--- |
-| **Throughput (Salida)** | ~450 cajas/h | **>1.500 cajas/h** 🚀 |
-| **Ocupación Pico** | >85% (Colapso) | **<12%** |
-| **Tiempo medio / Pallet** | >120s | **~39s** |
-| **Estado del Silo** | Saturado | **Vaciado fluido** |
+## Challenges we ran into
 
----
+The hardest part was handling many operations happening at the same time. Store and retrieve tasks share the same 32 shuttles, so we had to carefully simulate time and shuttle availability.
 
-## 🛠️ Guía de Uso del Sistema
+Another challenge was the Z-depth restriction: if a box is behind another one, the front box must be relocated first. This made the optimization more complex.
 
-El proyecto cuenta con dos modos de ejecución: uno para pura potencia de cálculo y otro visual e interactivo para presentaciones.
+## Accomplishments that we're proud of
 
-### Instalación
-Asegúrate de tener instaladas las dependencias gráficas y de datos:
-```bash
-pip install streamlit pandas plotly
-```
+We are proud of building a working concurrent simulation with real warehouse constraints. We also created several algorithms, benchmarked them, and built an interactive dashboard to visualize the results.
 
-### 🖥️ 1. Live Dashboard (Recomendado para la demo)
-Hemos construido un panel de control en tiempo real con **Streamlit** que permite viajar en el tiempo a lo largo de la simulación y comparar algoritmos visualmente.
+We are especially proud that users can inspect a shuttle or box route and ask the AI assistant why a decision was made.
 
-Para arrancarlo:
-```bash
-python -m streamlit run dashboard.py
-```
-*(Se abrirá automáticamente en `http://localhost:8502`)*
+## What we learned
 
-**Cómo probarlo:**
-1. En el panel izquierdo, selecciona **Operation Mode -> Continuous**.
-2. En **Algorithm Strategy**, elige `Naive` para ver cómo el sistema colapsa, o `Optimized` para ver la solución perfecta.
-3. Pon una duración de **0.5 a 2.0 horas**.
-4. Haz clic en **Run Simulation** y usa la barra de *Timeline* inferior para reproducir los eventos.
+We learned that warehouse optimization is not only about choosing the shortest path. Good decisions must also consider shuttle workload, destination grouping, pallet completion, relocations, and future congestion.
 
-### 💻 2. Ejecución desde Terminal (CLI)
-Para pruebas masivas (por ejemplo, simular un turno de 8 horas) sin cargar la interfaz gráfica, puedes usar el CLI del simulador directamente:
+We also learned how useful visualization is when debugging complex simulations.
+
+## What's next for Hack the Flow
+
+Next, we would improve the algorithms with adaptive strategy switching, better prediction of incoming boxes, and more detailed real-time comparisons between strategies. We would also like to test the system with larger datasets and more realistic warehouse conditions.
+
+## Built With
+
+- Python
+- Streamlit
+- Plotly
+- pandas
+- Gemma API
+- Google AI Studio
+- CSV
+- Custom simulation engine
+- Hash maps
+
+## Try it out
+
+- GitHub Repo: https://github.com/BestDestro/HackUPC_2026.git
+
+## Run locally
+
+Install the required Python packages, then run:
 
 ```bash
-# Sintaxis: python main.py continuous <archivo.csv> <horas> <tasa_llegada>
-python main.py continuous silo-semi-empty.csv 8.0 1000
+streamlit run dashboard.py
 ```
-Verás un volcado en directo de las métricas (`arrived`, `stored`, `pending`, `occ%`) y un reporte final ultrarrápido al concluir.
 
----
-*Desarrollado para HackUPC 2026.* 🚀
+To enable the AI assistant with Gemma, set your API key before launching Streamlit:
+
+```powershell
+$env:MLH_GEMMA_API_KEY="your_api_key"
+$env:WAREHOUSE_AI_MODEL="gemma-3-27b-it"
+streamlit run dashboard.py
+```
+
+You can also paste the API key in the dashboard sidebar. If no API key is available, the chat uses a local fallback explanation based on the simulation metrics and algorithm configuration.
+
+## Benchmark algorithms
+
+Run all algorithms against the initial CSV and generated occupancy states:
+
+```bash
+python benchmark_algorithms.py --incoming 1000
+```
+
+Run selected algorithms:
+
+```bash
+python benchmark_algorithms.py --algorithms baseline nearest_head balanced_ready throughput
+```
+
+Results are saved in `benchmark_results/algorithm_benchmark.csv` and `benchmark_results/algorithm_benchmark.md`.
+
