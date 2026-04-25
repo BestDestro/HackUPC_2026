@@ -11,6 +11,7 @@ import pandas as pd
 import time
 import random
 import os
+from pathlib import Path
 
 from models import Box
 from silo import Silo
@@ -154,6 +155,19 @@ TRACE_COLORS = {
     "RELOCATE": "#a29bfe",
     "RETRIEVE_BLOCKER": "#fdcb6e",
 }
+
+PROJECT_STORY_PATH = Path(__file__).with_name("PROJECT_STORY.md")
+
+
+def load_project_story():
+    """Load the shared project documentation used by Streamlit and Devpost."""
+    if PROJECT_STORY_PATH.exists():
+        return PROJECT_STORY_PATH.read_text(encoding="utf-8")
+    return (
+        "# Hack the Flow\n\n"
+        "Real-time warehouse flow optimizer that schedules 32 shuttles to store, "
+        "retrieve, and relocate boxes efficiently in automated silos."
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -614,6 +628,9 @@ with st.sidebar:
     - Z-Relocation: Opportunistic when useful
     - State: Hash Maps (O(1))
     """)
+    st.markdown("---")
+    with st.expander("About Hack the Flow", expanded=False):
+        st.markdown(load_project_story())
 
 
 # ─────────────────────────────────────────────────────────────────────────────

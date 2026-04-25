@@ -1,6 +1,14 @@
-# Hack the Flow
+# Devpost submission
+
+## Project name
+
+Hack the Flow
+
+## Elevator pitch
 
 Real-time warehouse flow optimizer that schedules 32 shuttles to store, retrieve, and relocate boxes efficiently in automated silos.
+
+## Project Story
 
 ## Inspiration
 
@@ -42,51 +50,9 @@ Next, we would improve the algorithms with adaptive strategy switching, better p
 
 ## Built With
 
-- Python
-- Streamlit
-- Plotly
-- pandas
-- Gemma API
-- Google AI Studio
-- CSV
-- Custom simulation engine
-- Hash maps
+python, streamlit, plotly, pandas, gemma, google-ai-studio, csv, custom-simulation-engine, hash-maps
 
 ## Try it out
 
-- GitHub Repo: https://github.com/BestDestro/HackUPC_2026.git
-
-## Run locally
-
-Install the required Python packages, then run:
-
-```bash
-streamlit run dashboard.py
-```
-
-To enable the AI assistant with Gemma, set your API key before launching Streamlit:
-
-```powershell
-$env:MLH_GEMMA_API_KEY="your_api_key"
-$env:WAREHOUSE_AI_MODEL="gemma-3-27b-it"
-streamlit run dashboard.py
-```
-
-You can also paste the API key in the dashboard sidebar. If no API key is available, the chat uses a local fallback explanation based on the simulation metrics and algorithm configuration.
-
-## Benchmark algorithms
-
-Run all algorithms against the initial CSV and generated occupancy states:
-
-```bash
-python benchmark_algorithms.py --incoming 1000
-```
-
-Run selected algorithms:
-
-```bash
-python benchmark_algorithms.py --algorithms baseline nearest_head balanced_ready throughput
-```
-
-Results are saved in `benchmark_results/algorithm_benchmark.csv` and `benchmark_results/algorithm_benchmark.md`.
+GitHub Repo: https://github.com/BestDestro/HackUPC_2026.git
 
