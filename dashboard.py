@@ -33,62 +33,87 @@ st.set_page_config(
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
 
     .stApp {
         font-family: 'Inter', sans-serif;
+        background-color: #050505;
     }
     .main-title {
-        text-align: center;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-size: 2.5rem;
-        font-weight: 700;
+        text-align: left;
+        color: #ffffff;
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: 2.2rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        text-transform: uppercase;
         margin-bottom: 0;
+        border-bottom: 1px solid #333;
+        padding-bottom: 10px;
     }
     .subtitle {
-        text-align: center;
+        text-align: left;
         color: #888;
-        font-size: 1rem;
-        margin-top: -10px;
-        margin-bottom: 20px;
+        font-family: 'Inter', sans-serif;
+        font-size: 0.9rem;
+        letter-spacing: 0.05em;
+        margin-top: 10px;
+        margin-bottom: 30px;
+        text-transform: uppercase;
     }
     div[data-testid="stMetric"] {
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        border: 1px solid #333;
-        border-radius: 12px;
+        background: #0A0A0A;
+        border: 1px solid #222;
+        border-radius: 0px;
         padding: 16px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        box-shadow: none;
     }
     div[data-testid="stMetric"] label {
-        color: #aaa !important;
-        font-size: 0.85rem !important;
+        color: #777 !important;
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: 0.75rem !important;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
     }
     div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+        color: #fff !important;
         font-size: 1.8rem !important;
-        font-weight: 700 !important;
+        font-weight: 400 !important;
+        font-family: 'Space Grotesk', sans-serif;
     }
     .phase-badge-input {
-        background: linear-gradient(135deg, #00b894, #00cec9);
-        padding: 4px 12px; border-radius: 20px;
-        font-size: 0.75rem; font-weight: 600; color: #fff;
+        background: transparent;
+        border: 1px solid #fff;
+        padding: 2px 8px; border-radius: 0px;
+        font-size: 0.65rem; font-weight: 500; color: #fff;
         display: inline-block;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
     }
     .phase-badge-output {
-        background: linear-gradient(135deg, #e17055, #d63031);
-        padding: 4px 12px; border-radius: 20px;
-        font-size: 0.75rem; font-weight: 600; color: #fff;
+        background: #fff;
+        border: 1px solid #fff;
+        padding: 2px 8px; border-radius: 0px;
+        font-size: 0.65rem; font-weight: 500; color: #000;
         display: inline-block;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
     }
     .phase-badge-concurrent {
-        background: linear-gradient(135deg, #667eea, #764ba2);
-        padding: 4px 12px; border-radius: 20px;
-        font-size: 0.75rem; font-weight: 600; color: #fff;
+        background: transparent;
+        border: 1px solid #888;
+        padding: 2px 8px; border-radius: 0px;
+        font-size: 0.65rem; font-weight: 500; color: #888;
         display: inline-block;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
     }
     .stSidebar [data-testid="stSidebarContent"] {
-        background: linear-gradient(180deg, #0f0c29, #302b63, #24243e);
+        background: #000000;
+        border-right: 1px solid #111;
+    }
+    hr {
+        border-top: 1px solid #222;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -133,21 +158,21 @@ def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hour
 # ─────────────────────────────────────────────────────────────────────────────
 # CHART BUILDERS
 # ─────────────────────────────────────────────────────────────────────────────
-DARK_BG = "#0e1117"
-GRID_COLOR = "#1e2130"
+DARK_BG = "#050505"
+GRID_COLOR = "#1a1a1a"
 COLORS = {
-    'stored': '#00b894',
-    'retrieved': '#e17055',
-    'occupancy': '#667eea',
-    'pallets': '#fdcb6e',
-    'pending': '#ff7675',
-    'relocations': '#a29bfe',
-    'aisle1': '#00cec9',
-    'aisle2': '#6c5ce7',
-    'aisle3': '#fd79a8',
-    'aisle4': '#ffeaa7',
-    'busy': '#e17055',
-    'idle': '#00b894',
+    'stored': '#ffffff',
+    'retrieved': '#888888',
+    'occupancy': '#cccccc',
+    'pallets': '#aaaaaa',
+    'pending': '#555555',
+    'relocations': '#333333',
+    'aisle1': '#ffffff',
+    'aisle2': '#bbbbbb',
+    'aisle3': '#777777',
+    'aisle4': '#333333',
+    'busy': '#ffffff',
+    'idle': '#222222',
 }
 
 
@@ -231,16 +256,16 @@ def build_pending_chart(df):
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=df['time_min'], y=df['pending_input'], name='Pending',
-        line=dict(color=COLORS['pending'], width=2),
-        fill='tozeroy', fillcolor='rgba(255,118,117,0.15)'))
+        line=dict(color=COLORS['pending'], width=1),
+        fill='tozeroy', fillcolor='rgba(255,255,255,0.05)'))
     fig.add_trace(go.Scatter(
         x=df['time_min'], y=df['relocations'], name='Relocations (cumul)',
-        line=dict(color=COLORS['relocations'], width=1.5, dash='dot'),
+        line=dict(color=COLORS['relocations'], width=1, dash='dot'),
         yaxis='y2'))
     chart_layout(fig, "Input Queue & Relocations")
     fig.update_layout(
         yaxis2=dict(title="Relocations", overlaying='y', side='right',
-                    gridcolor=GRID_COLOR, color='#a29bfe'))
+                    gridcolor=GRID_COLOR, color='#888'))
     return fig
 
 
