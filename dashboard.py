@@ -278,6 +278,9 @@ with st.sidebar:
     else:
         st.markdown("- **Lookahead:** Strict (12 boxes)\n- **Output:** Sequential (1 Shuttle max/tick)\n- **Gate:** Occupancy > 50%\n- **State:** Hash Maps O(1)")
 
+    st.markdown("---")
+    st.markdown("**🤖 Integración IA (Activa)**")
+    st.success("Conectado a Google Gemini")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -411,3 +414,54 @@ with st.expander("Final Simulation Summary", expanded=False):
         st.write(f"- Relocations: {result.get('total_relocations', 'N/A')}")
         st.write(f"- Remaining in silo: {result.get('remaining_in_silo', 'N/A')}")
         st.write(f"- Shuttle max time: {result.get('shuttle_max_time', 'N/A')}")
+
+# ─── GEMINI AI ASSISTANT ───────────────────────────────────────────────────
+st.markdown("---")
+st.markdown("### 🤖 Habla con el Silo (Gemini AI)")
+st.markdown("Pregúntale a la IA sobre su estado actual, qué está haciendo o si detecta algún cuello de botella.")
+
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
+
+# Display chat history
+for message in st.session_state.chat_messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+if prompt := st.chat_input("Pregúntale al Silo (ej: '¿Cómo vas de ocupación?', '¿Hay mucho trabajo pendiente?'):"):
+    st.session_state.chat_messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Analizando estado del silo..."):
+            try:
+                from google import genai
+                client = genai.Client(api_key="AIzaSyAjIyY46MQq7yJYtodNIFS2JmZtI8QtW8o")
+                
+                # Context generation
+                context = f"""
+                Eres la IA integrada en un Silo Logístico Automatizado avanzado gestionando 32 shuttles robóticos.
+                Debes responder a las preguntas del operador de forma profesional, técnica y muy breve (máximo 2-3 frases), hablando en primera persona ("Tengo...", "He almacenado...").
+                
+                Métricas en tiempo real (Tiempo Simulado: {current['time_min']:.1f} min):
+                - Cajas guardadas en total: {int(current['boxes_stored'])}
+                - Cajas extraídas en total: {int(current['boxes_retrieved'])}
+                - Ocupación física: {current['occupancy_pct']:.1f}% de 7680 slots
+                - Cajas pendientes de procesar en entrada: {int(current['pending_input'])}
+                - Tareas de reubicación realizadas (desatascos): {int(current['relocations'])}
+                - Pallets de salida completados: {int(current['pallets_completed'])}
+                - Estrategia algorítmica activa: {algo_mode}
+                
+                El operador te ha preguntado:
+                """
+                # Use Gemini to generate response with the new SDK
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=context + prompt
+                )
+                
+                st.markdown(response.text)
+                st.session_state.chat_messages.append({"role": "assistant", "content": response.text})
+            except Exception as e:
+                st.error(f"Error de conexión con la IA: {str(e)}")
