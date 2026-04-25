@@ -9,6 +9,7 @@ Each shuttle tracks busy_until (timestamp when it becomes free).
 import heapq
 import time as time_module
 from collections import Counter, defaultdict
+from statistics import median
 from typing import Optional, List, Tuple
 
 from models import Position, Box, Pallet
@@ -60,6 +61,8 @@ class ConcurrentManager:
         self.boxes_stored = 0
         self.boxes_retrieved = 0
         self.total_relocations = 0
+        self.box_entered_silo_at: dict = {}
+        self.box_dwell_times: List[float] = []
         self.sim_time = 0.0
 
         # Snapshots for dashboard visualization
@@ -73,6 +76,26 @@ class ConcurrentManager:
     def _shuttle_move_cost(self, key, from_x, to_x):
         """Cost of moving a shuttle from from_x to to_x."""
         return HANDLING_TIME + abs(from_x - to_x)
+
+    def register_initial_boxes(self, boxes: dict, stored_at: float = 0.0):
+        """Track pre-loaded boxes as already inside the silo."""
+        for box_id in boxes:
+            self.box_entered_silo_at[box_id] = stored_at
+
+    def _record_box_stored(self, box: Box, stored_at: float):
+        self.box_entered_silo_at[box.box_id] = stored_at
+
+    def _record_box_retrieved(self, box: Box, retrieved_at: float):
+        stored_at = self.box_entered_silo_at.pop(box.box_id, None)
+        if stored_at is not None:
+            self.box_dwell_times.append(max(0.0, retrieved_at - stored_at))
+
+    def _format_duration(self, seconds: float) -> str:
+        if seconds >= 3600:
+            return f"{seconds / 3600:.2f}h"
+        if seconds >= 60:
+            return f"{seconds / 60:.1f}min"
+        return f"{seconds:.1f}s"
 
     def _get_free_shuttles_at(self, t: float) -> List[tuple]:
         """Get all shuttle keys that are free at time t."""
@@ -93,6 +116,7 @@ class ConcurrentManager:
         self.shuttle_x[key] = pos.x
 
         self.silo.place_box(box, pos)
+        self._record_box_stored(box, finish_time)
         self.boxes_stored += 1
         return finish_time
 
@@ -101,6 +125,7 @@ class ConcurrentManager:
         pos = box.position
         key = (pos.aisle, pos.y)
         cur_x = self.shuttle_x[key]
+        start_time = max(t, self.shuttle_free_at[key])
         total = 0.0
 
         # Handle Z=2 blockage
@@ -119,6 +144,7 @@ class ConcurrentManager:
                         self.silo.remove_box(blocking_box.box_id)
                         pallet.retrieved.append(blocking_box)
                         blocking_box.position = None
+                        self._record_box_retrieved(blocking_box, start_time + total)
                         self.boxes_retrieved += 1
                         cur_x = 0
                         sent_to_pallet = True
@@ -145,12 +171,13 @@ class ConcurrentManager:
         t_to_head = self._shuttle_move_cost(key, pos.x, 0)
         total += t_to_box + t_to_head
 
-        finish_time = max(t, self.shuttle_free_at[key]) + total
+        finish_time = start_time + total
         self.shuttle_free_at[key] = finish_time
         self.shuttle_x[key] = 0
 
         self.silo.remove_box(box.box_id)
         box.position = None
+        self._record_box_retrieved(box, finish_time)
         self.boxes_retrieved += 1
         return finish_time
 
@@ -487,6 +514,9 @@ class ConcurrentManager:
 
         # Shuttle utilization: how many are busy right now
         busy_count = sum(1 for ft in self.shuttle_free_at.values() if ft > self.sim_time)
+        avg_dwell = (sum(self.box_dwell_times) / len(self.box_dwell_times)
+                     if self.box_dwell_times else 0.0)
+        median_dwell = median(self.box_dwell_times) if self.box_dwell_times else 0.0
 
         # Per-aisle shuttle positions
         shuttle_positions = {}
@@ -504,6 +534,8 @@ class ConcurrentManager:
             'occupancy': self.silo.occupied_count,
             'occupancy_pct': self.silo.occupancy_rate * 100,
             'relocations': self.total_relocations,
+            'avg_time_in_silo_sec': avg_dwell,
+            'median_time_in_silo_sec': median_dwell,
             'shuttles_busy': busy_count,
             'shuttles_idle': 32 - busy_count,
             'aisle_1': aisle_occ.get(1, 0),
@@ -522,6 +554,12 @@ class ConcurrentManager:
         avg_time = sum(shuttle_times) / len(shuttle_times)
 
         avg_per_pallet = max_time / pallets_done if pallets_done else 0
+        effective_hours = self.sim_time / 3600 if self.sim_time > 0 else 0
+        pallets_per_hour = pallets_done / effective_hours if effective_hours > 0 else 0
+        boxes_per_hour = self.boxes_retrieved / effective_hours if effective_hours > 0 else 0
+        avg_dwell = (sum(self.box_dwell_times) / len(self.box_dwell_times)
+                     if self.box_dwell_times else 0.0)
+        median_dwell = median(self.box_dwell_times) if self.box_dwell_times else 0.0
 
         return {
             "sim_time": self.sim_time,
@@ -530,12 +568,18 @@ class ConcurrentManager:
             "boxes_retrieved": self.boxes_retrieved,
             "boxes_pending_input": len(pending_input),
             "pallets_completed": pallets_done,
+            "pallets_per_hour": f"{pallets_per_hour:.1f}",
+            "boxes_per_hour": f"{boxes_per_hour:.0f}",
             "full_pallet_pct": f"{(pallets_done * 12 / max(self.boxes_stored,1)) * 100:.1f}%",
             "avg_time_per_pallet": f"{avg_per_pallet:.1f}s",
+            "avg_time_in_silo": self._format_duration(avg_dwell) if self.box_dwell_times else "N/A",
+            "avg_time_in_silo_sec": avg_dwell,
+            "median_time_in_silo": self._format_duration(median_dwell) if self.box_dwell_times else "N/A",
+            "median_time_in_silo_sec": median_dwell,
+            "boxes_with_time_in_silo": len(self.box_dwell_times),
             "total_relocations": self.total_relocations,
             "remaining_in_silo": remaining,
             "silo_occupancy": f"{self.silo.occupancy_rate:.1%}",
-            "shuttle_max_time": f"{max_time:.1f}s",
             "shuttle_avg_time": f"{avg_time:.1f}s",
         }
 
@@ -575,6 +619,7 @@ def run_concurrent_from_csv(csv_path: str, num_incoming: int = 1000,
     # Register pre-loaded boxes
     manager.all_boxes.update(all_boxes)
     manager.boxes_stored = stats["loaded"]
+    manager.register_initial_boxes(all_boxes)
 
     if verbose:
         print(f"  Pre-loaded: {stats['loaded']} boxes ({silo.occupancy_rate:.1%} occupancy)")
@@ -678,6 +723,7 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
     stats = result["stats"]
     manager.all_boxes.update(all_boxes)
     manager.boxes_stored = stats["loaded"]
+    manager.register_initial_boxes(all_boxes)
     existing_dests = list(set(b.destination for b in all_boxes.values()))
 
     if verbose:
@@ -848,6 +894,9 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
     shuttle_times = list(manager.shuttle_free_at.values())
     max_stime = max(shuttle_times)
     avg_stime = sum(shuttle_times) / len(shuttle_times)
+    avg_dwell = (sum(manager.box_dwell_times) / len(manager.box_dwell_times)
+                 if manager.box_dwell_times else 0.0)
+    median_dwell = median(manager.box_dwell_times) if manager.box_dwell_times else 0.0
 
     # Throughput rate
     effective_hours = sim_time / 3600
@@ -865,15 +914,20 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
         "boxes_pending_final": len(pending_input),
         "pallets_completed": pallets_done,
         "pallets_per_hour": f"{pallets_per_hour:.1f}",
+        "boxes_per_hour": f"{boxes_per_hour_out:.0f}",
         "boxes_out_per_hour": f"{boxes_per_hour_out:.0f}",
         "full_pallet_pct": f"{(pallets_done * 12 / max(manager.boxes_stored, 1)) * 100:.1f}%",
         "avg_time_per_pallet": f"{max_stime / pallets_done:.1f}s" if pallets_done else "N/A",
+        "avg_time_in_silo": manager._format_duration(avg_dwell) if manager.box_dwell_times else "N/A",
+        "avg_time_in_silo_sec": avg_dwell,
+        "median_time_in_silo": manager._format_duration(median_dwell) if manager.box_dwell_times else "N/A",
+        "median_time_in_silo_sec": median_dwell,
+        "boxes_with_time_in_silo": len(manager.box_dwell_times),
         "total_relocations": manager.total_relocations,
         "peak_occupancy": f"{peak_occupancy:.1%}",
         "final_occupancy": f"{silo.occupancy_rate:.1%}",
         "remaining_in_silo": silo.occupied_count,
         "overload_events": len(overload_events),
-        "shuttle_max_time": f"{max_stime:.1f}s",
         "shuttle_avg_time": f"{avg_stime:.1f}s",
         "snapshots": manager.snapshots,
     }
@@ -886,6 +940,8 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
         print(f"  Boxes generated:       {box_counter:,}")
         print(f"  Boxes stored:          {manager.boxes_stored:,}")
         print(f"  Boxes retrieved:       {manager.boxes_retrieved:,}")
+        print(f"  Avg box stay:          {metrics['avg_time_in_silo']}")
+        print(f"  Median box stay:       {metrics['median_time_in_silo']}")
         print(f"  Pallets completed:     {pallets_done:,}")
         print(f"  Pallets/hour:          {pallets_per_hour:.1f}")
         print(f"  Boxes out/hour:        {boxes_per_hour_out:.0f}")

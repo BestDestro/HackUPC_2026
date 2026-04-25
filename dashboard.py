@@ -122,8 +122,10 @@ st.markdown("""
 # ─────────────────────────────────────────────────────────────────────────────
 # SIMULATION RUNNER (cached)
 # ─────────────────────────────────────────────────────────────────────────────
+METRICS_VERSION = 4
+
 @st.cache_data(show_spinner="Running simulation...")
-def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_mode):
+def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_mode, metrics_version):
     """Run the selected simulation mode and return snapshots."""
     if mode == "Continuous":
         return run_continuous(csv_path, num_destinations=num_destinations,
@@ -139,6 +141,7 @@ def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hour
         stats = result["stats"]
         manager.all_boxes.update(all_boxes)
         manager.boxes_stored = stats["loaded"]
+        manager.register_initial_boxes(all_boxes)
 
         existing_dests = list(set(b.destination for b in all_boxes.values()))
 
@@ -158,6 +161,16 @@ def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hour
 # ─────────────────────────────────────────────────────────────────────────────
 # CHART BUILDERS
 # ─────────────────────────────────────────────────────────────────────────────
+def format_duration(seconds):
+    if seconds is None:
+        return "N/A"
+    if seconds >= 3600:
+        return f"{seconds / 3600:.2f}h"
+    if seconds >= 60:
+        return f"{seconds / 60:.1f}min"
+    return f"{seconds:.1f}s"
+
+
 DARK_BG = "#050505"
 GRID_COLOR = "#1a1a1a"
 COLORS = {
@@ -272,13 +285,22 @@ def build_pending_chart(df):
 # ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────────────────────────────────────────
+CSV_SCENARIOS = {
+    "Inicial entregado (~12% lleno)": "silo-semi-empty.csv",
+    "Medio lleno (50%)": "silo-half-full.csv",
+    "Casi lleno (90%)": "silo-almost-full.csv",
+    "Practicamente lleno (98%)": "silo-98-full.csv",
+}
+
 with st.sidebar:
     st.markdown("### Simulation Parameters")
 
     sim_mode = st.radio("Operation Mode", ["Concurrent (Finite)", "Continuous (Infinite Flow)"])
     algo_mode = st.radio("Algorithm Strategy", ["Optimized (Parallel + Lookahead)", "Naive (Legacy)"])
 
-    csv_path = st.text_input("CSV File", value="silo-semi-empty.csv")
+    csv_scenario = st.selectbox("Estado inicial del silo", list(CSV_SCENARIOS.keys()))
+    csv_path = CSV_SCENARIOS[csv_scenario]
+    st.caption(f"CSV: `{csv_path}`")
     num_destinations = st.slider("Destinations", 5, 80, 20)
 
     if sim_mode == "Concurrent (Finite)":
@@ -321,12 +343,19 @@ if not os.path.exists(csv_path):
     st.stop()
 
 # Run or use cached simulation
-if run_btn or 'sim_result' not in st.session_state:
+needs_rerun = (
+    run_btn
+    or 'sim_result' not in st.session_state
+    or st.session_state.get('metrics_version') != METRICS_VERSION
+)
+
+if needs_rerun:
     with st.spinner(f"Running {sim_mode}..."):
         mode_str = "Continuous" if "Continuous" in sim_mode else "Concurrent"
         algo_str = "Naive" if "Naive" in algo_mode else "Optimized"
-        result = run_simulation(mode_str, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_str)
+        result = run_simulation(mode_str, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_str, METRICS_VERSION)
         st.session_state.sim_result = result
+        st.session_state.metrics_version = METRICS_VERSION
         st.session_state.playback_idx = 0
 else:
     result = st.session_state.sim_result
@@ -376,13 +405,18 @@ else:
 st.markdown(f"#### Sim Time: **{current['time_min']:.1f} min** &nbsp; {phase_html}",
             unsafe_allow_html=True)
 
-k1, k2, k3, k4, k5, k6 = st.columns(6)
+avg_box_stay = format_duration(current.get('avg_time_in_silo_sec', 0.0))
+median_box_stay = format_duration(current.get('median_time_in_silo_sec', 0.0))
+
+k1, k2, k3, k4, k5, k6, k7, k8 = st.columns(8)
 k1.metric("Boxes Stored", f"{int(current['boxes_stored']):,}")
 k2.metric("Boxes Retrieved", f"{int(current['boxes_retrieved']):,}")
 k3.metric("Pallets Done", int(current['pallets_completed']))
 k4.metric("Occupancy", f"{current['occupancy_pct']:.1f}%")
 k5.metric("Pending Input", int(current['pending_input']))
 k6.metric("Relocations", int(current['relocations']))
+k7.metric("Avg Stay", avg_box_stay)
+k8.metric("Median Stay", median_box_stay)
 
 # ─── CHARTS ─────────────────────────────────────────────────────────────────
 st.markdown("---")
@@ -429,16 +463,19 @@ with st.expander("Final Simulation Summary", expanded=False):
         st.write(f"- Boxes arrived: {result.get('boxes_arrived', 'N/A')}")
         st.write(f"- Boxes stored: {result.get('boxes_stored', 'N/A')}")
         st.write(f"- Boxes retrieved: {result.get('boxes_retrieved', 'N/A')}")
+        st.write(f"- Boxes/hour: {result.get('boxes_per_hour', 'N/A')}")
     with summary_cols[1]:
         st.markdown("**Pallets**")
         st.write(f"- Completed: {result.get('pallets_completed', 'N/A')}")
-        st.write(f"- Full pallet %: {result.get('full_pallet_pct', 'N/A')}")
+        st.write(f"- Pallets/hour: {result.get('pallets_per_hour', 'N/A')}")
+        st.write(f"- Full pallet: {result.get('full_pallet_pct', 'N/A')}")
         st.write(f"- Avg time/pallet: {result.get('avg_time_per_pallet', 'N/A')}")
+        st.write(f"- Avg box stay: {result.get('avg_time_in_silo', 'N/A')}")
+        st.write(f"- Median box stay: {result.get('median_time_in_silo', 'N/A')}")
     with summary_cols[2]:
         st.markdown("**System**")
         st.write(f"- Relocations: {result.get('total_relocations', 'N/A')}")
         st.write(f"- Remaining in silo: {result.get('remaining_in_silo', 'N/A')}")
-        st.write(f"- Shuttle max time: {result.get('shuttle_max_time', 'N/A')}")
 
 # ─── GEMINI AI ASSISTANT ───────────────────────────────────────────────────
 st.markdown("---")
