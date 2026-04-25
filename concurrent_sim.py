@@ -23,161 +23,14 @@ BOX_ARRIVAL_RATE = 1000  # boxes per hour
 BOX_INTERVAL = 3600.0 / BOX_ARRIVAL_RATE  # ~3.6 seconds
 
 
-def build_algorithms(config_name: str):
-    from algorithms.storage import (
-        AisleSpreadStorage,
-        BalancedStorage,
-        DenseLaneStorage,
-        DestinationGroupedStorage,
-        GreedyStorage,
-        NearestHeadStorage,
-        RetrievalFriendlyStorage,
-    )
-    from algorithms.pallet_selection import (
-        CheapestPalletFirst,
-        HighestDensityPalletFirst,
-        LeastBlockedPalletFirst,
-        MinRelocationRiskPalletFirst,
-        MostBoxesFirst,
-        ScarcityAwarePalletFirst,
-        ShuttleBalancedPalletFirst,
-        ThroughputPalletFirst,
-    )
-    from algorithms.retrieval import (
-        CheapestBoxFirst,
-        DepthAwareRetrieval,
-        FinishPalletFirstRetrieval,
-        PalletBatchRetrieval,
-        RelocationOpportunisticRetrieval,
-        ShuttleReadyRetrieval,
-        UnblockedFirstRetrieval,
-    )
-
-    configs = {
-        "baseline": (
-            GreedyStorage(),
-            CheapestPalletFirst(),
-            CheapestBoxFirst(),
-        ),
-        "least_blocked": (
-            GreedyStorage(),
-            LeastBlockedPalletFirst(),
-            CheapestBoxFirst(),
-        ),
-        "grouped": (
-            DestinationGroupedStorage(),
-            CheapestPalletFirst(),
-            CheapestBoxFirst(),
-        ),
-        "grouped_blocked": (
-            DestinationGroupedStorage(),
-            LeastBlockedPalletFirst(),
-            CheapestBoxFirst(),
-        ),
-        "balanced": (
-            BalancedStorage(),
-            LeastBlockedPalletFirst(),
-            FinishPalletFirstRetrieval(),
-        ),
-        "most_boxes": (
-            GreedyStorage(),
-            MostBoxesFirst(),
-            CheapestBoxFirst(),
-        ),
-        "nearest_head": (
-            NearestHeadStorage(),
-            ThroughputPalletFirst(),
-            ShuttleReadyRetrieval(),
-        ),
-        "spread_unblocked": (
-            AisleSpreadStorage(),
-            MinRelocationRiskPalletFirst(),
-            UnblockedFirstRetrieval(),
-        ),
-        "retrieval_friendly": (
-            RetrievalFriendlyStorage(),
-            MinRelocationRiskPalletFirst(),
-            DepthAwareRetrieval(),
-        ),
-        "dense_batch": (
-            DenseLaneStorage(),
-            HighestDensityPalletFirst(),
-            PalletBatchRetrieval(),
-        ),
-        "balanced_ready": (
-            BalancedStorage(),
-            ShuttleBalancedPalletFirst(),
-            ShuttleReadyRetrieval(),
-        ),
-        "opportunistic": (
-            DestinationGroupedStorage(),
-            HighestDensityPalletFirst(),
-            RelocationOpportunisticRetrieval(),
-        ),
-        "scarcity_depth": (
-            RetrievalFriendlyStorage(),
-            ScarcityAwarePalletFirst(),
-            DepthAwareRetrieval(),
-        ),
-        "throughput": (
-            AisleSpreadStorage(),
-            ThroughputPalletFirst(),
-            CheapestBoxFirst(),
-        ),
-    }
-
-    if config_name not in configs:
-        raise ValueError(
-            f"Unknown algorithm_config '{config_name}'. "
-            f"Choose one of: {list(configs.keys())}"
-        )
-
-    return configs[config_name]
-
-
-def available_algorithm_configs() -> list[str]:
-    return [
-        "baseline",
-        "least_blocked",
-        "grouped",
-        "grouped_blocked",
-        "balanced",
-        "most_boxes",
-        "nearest_head",
-        "spread_unblocked",
-        "retrieval_friendly",
-        "dense_batch",
-        "balanced_ready",
-        "opportunistic",
-        "scarcity_depth",
-        "throughput",
-    ]
-
-
 class ConcurrentManager:
     """
     Event-driven manager that interleaves INPUT and OUTPUT operations.
     Each shuttle has a busy_until timestamp; tasks are only assigned
     to shuttles that are free at the current simulation time.
     """
-    
-    def __init__(
-        self,
-        silo: Silo,
-        shuttle_mgr: ShuttleManager,
-        storage_algorithm=None,
-        pallet_algorithm=None,
-        retrieval_algorithm=None,
-    ):
-        from algorithms.storage import GreedyStorage
-        from algorithms.pallet_selection import CheapestPalletFirst
-        from algorithms.retrieval import CheapestBoxFirst
 
-        self.storage_algorithm = storage_algorithm or GreedyStorage()
-        self.pallet_algorithm = pallet_algorithm or CheapestPalletFirst()
-        self.retrieval_algorithm = retrieval_algorithm or CheapestBoxFirst()
-        
-
+    def __init__(self, silo: Silo, shuttle_mgr: ShuttleManager):
         self.silo = silo
         self.shuttle_mgr = shuttle_mgr
 
@@ -213,10 +66,6 @@ class ConcurrentManager:
         self.snapshots: List[dict] = []
         self._last_snapshot_time = -999.0
 
-        # Detailed event trace for explainability and route zoom.
-        self.trace_events: List[dict] = []
-        self._event_id = 0
-
     # =========================================================================
     # SHUTTLE HELPERS
     # =========================================================================
@@ -229,116 +78,22 @@ class ConcurrentManager:
         """Get all shuttle keys that are free at time t."""
         return [k for k, free_t in self.shuttle_free_at.items() if free_t <= t]
 
-    def _position_label(self, pos: Optional[Position]) -> str:
-        if pos is None:
-            return "HEAD"
-        return f"A{pos.aisle}-S{pos.side}-X{pos.x}-Y{pos.y}-Z{pos.z}"
-
-    def _record_trace_event(
-        self,
-        event_type: str,
-        box: Box,
-        key: tuple,
-        start_time: float,
-        end_time: float,
-        box_from_x: int,
-        box_to_x: int,
-        shuttle_from_x: int,
-        shuttle_to_x: int,
-        from_position: Optional[Position],
-        to_position: Optional[Position],
-        reason: str,
-        decision: str,
-        related_box_id: Optional[str] = None,
-    ):
-        """Store a compact movement/decision event for dashboard explainability."""
-        self._event_id += 1
-        aisle, y = key
-        self.trace_events.append({
-            "event_id": self._event_id,
-            "event_type": event_type,
-            "box_id": box.box_id,
-            "destination": box.destination,
-            "related_box_id": related_box_id or "",
-            "shuttle_id": f"A{aisle}_Y{y}",
-            "aisle": aisle,
-            "y": y,
-            "start_time": round(start_time, 3),
-            "end_time": round(end_time, 3),
-            "duration": round(max(0.0, end_time - start_time), 3),
-            "start_min": round(start_time / 60.0, 3),
-            "end_min": round(end_time / 60.0, 3),
-            "box_from_x": box_from_x,
-            "box_to_x": box_to_x,
-            "shuttle_from_x": shuttle_from_x,
-            "shuttle_to_x": shuttle_to_x,
-            "from_position": self._position_label(from_position),
-            "to_position": self._position_label(to_position),
-            "reason": reason,
-            "decision": decision,
-        })
-
-    def record_initial_state(self, all_boxes: dict):
-        """Add initial box locations to the explainability trace."""
-        for box in all_boxes.values():
-            pos = box.position
-            if not pos:
-                continue
-            key = (pos.aisle, pos.y)
-            self._record_trace_event(
-                event_type="INITIAL",
-                box=box,
-                key=key,
-                start_time=0.0,
-                end_time=0.0,
-                box_from_x=pos.x,
-                box_to_x=pos.x,
-                shuttle_from_x=self.shuttle_x.get(key, 0),
-                shuttle_to_x=self.shuttle_x.get(key, 0),
-                from_position=pos,
-                to_position=pos,
-                reason="Caja precargada desde el CSV inicial.",
-                decision="Estado inicial heredado antes de empezar la simulacion.",
-            )
-
     def _execute_store(self, box: Box, pos: Position, t: float) -> float:
         """Execute a store operation. Returns completion time."""
         key = (pos.aisle, pos.y)
         cur_x = self.shuttle_x[key]
-        start_time = max(t, self.shuttle_free_at[key])
 
         # Move to head (pick box), then to position (drop box)
         t_to_head = self._shuttle_move_cost(key, cur_x, 0)
         t_to_pos = self._shuttle_move_cost(key, 0, pos.x)
         total = t_to_head + t_to_pos
 
-        finish_time = start_time + total
+        finish_time = max(t, self.shuttle_free_at[key]) + total
         self.shuttle_free_at[key] = finish_time
         self.shuttle_x[key] = pos.x
 
         self.silo.place_box(box, pos)
         self.boxes_stored += 1
-        self._record_trace_event(
-            event_type="STORE",
-            box=box,
-            key=key,
-            start_time=start_time,
-            end_time=finish_time,
-            box_from_x=0,
-            box_to_x=pos.x,
-            shuttle_from_x=cur_x,
-            shuttle_to_x=pos.x,
-            from_position=None,
-            to_position=pos,
-            reason=(
-                f"{self.storage_algorithm.name} eligio este hueco por cercania, "
-                "disponibilidad del shuttle, preferencia Z y/o agrupacion por destino."
-            ),
-            decision=(
-                "La caja entra por HEAD y se asigna al mejor slot libre que minimiza "
-                "espera y recorrido sin romper la restriccion de profundidad."
-            ),
-        )
         return finish_time
 
     def _execute_retrieve(self, box: Box, t: float) -> float:
@@ -347,7 +102,6 @@ class ConcurrentManager:
         key = (pos.aisle, pos.y)
         cur_x = self.shuttle_x[key]
         total = 0.0
-        time_cursor = max(t, self.shuttle_free_at[key])
 
         # Handle Z=2 blockage
         if self.silo.is_blocked(pos):
@@ -361,37 +115,12 @@ class ConcurrentManager:
                         # Send blocking box directly to output
                         t_pick = self._shuttle_move_cost(key, cur_x, pos.x)
                         t_drop = self._shuttle_move_cost(key, pos.x, 0)
-                        event_start = time_cursor
-                        event_end = time_cursor + t_pick + t_drop
                         total += t_pick + t_drop
                         self.silo.remove_box(blocking_box.box_id)
                         pallet.retrieved.append(blocking_box)
                         blocking_box.position = None
                         self.boxes_retrieved += 1
-                        self._record_trace_event(
-                            event_type="RETRIEVE_BLOCKER",
-                            box=blocking_box,
-                            key=key,
-                            start_time=event_start,
-                            end_time=event_end,
-                            box_from_x=pos.x,
-                            box_to_x=0,
-                            shuttle_from_x=cur_x,
-                            shuttle_to_x=0,
-                            from_position=Position(pos.aisle, pos.side, pos.x, pos.y, 1),
-                            to_position=None,
-                            reason=(
-                                "La caja objetivo estaba en Z=2 y esta caja bloqueaba en Z=1, "
-                                "pero tambien pertenecia a un pallet activo."
-                            ),
-                            decision=(
-                                "En vez de relocalizarla, se aprovecha el movimiento y se lleva "
-                                "directamente a salida para avanzar el pallet."
-                            ),
-                            related_box_id=box.box_id,
-                        )
                         cur_x = 0
-                        time_cursor = event_end
                         sent_to_pallet = True
                         break
 
@@ -406,72 +135,23 @@ class ConcurrentManager:
                     if nearest:
                         t_pick = self._shuttle_move_cost(key, cur_x, pos.x)
                         t_drop = self._shuttle_move_cost(key, pos.x, nearest.x)
-                        event_start = time_cursor
-                        event_end = time_cursor + t_pick + t_drop
                         total += t_pick + t_drop
-                        from_position = Position(pos.aisle, pos.side, pos.x, pos.y, 1)
                         self.silo.remove_box(blocking_box.box_id)
                         self.silo.place_box(blocking_box, nearest)
-                        self._record_trace_event(
-                            event_type="RELOCATE",
-                            box=blocking_box,
-                            key=key,
-                            start_time=event_start,
-                            end_time=event_end,
-                            box_from_x=pos.x,
-                            box_to_x=nearest.x,
-                            shuttle_from_x=cur_x,
-                            shuttle_to_x=nearest.x,
-                            from_position=from_position,
-                            to_position=nearest,
-                            reason=(
-                                "La caja objetivo estaba al fondo en Z=2 y la posicion frontal Z=1 "
-                                "estaba ocupada."
-                            ),
-                            decision=(
-                                "Se mueve la caja bloqueante al hueco libre cercano para abrir acceso "
-                                "a la caja objetivo."
-                            ),
-                            related_box_id=box.box_id,
-                        )
                         cur_x = nearest.x
-                        time_cursor = event_end
 
         # Pick target box and bring to head
         t_to_box = self._shuttle_move_cost(key, cur_x, pos.x)
         t_to_head = self._shuttle_move_cost(key, pos.x, 0)
-        event_start = time_cursor
-        event_end = time_cursor + t_to_box + t_to_head
         total += t_to_box + t_to_head
 
-        finish_time = event_end
+        finish_time = max(t, self.shuttle_free_at[key]) + total
         self.shuttle_free_at[key] = finish_time
         self.shuttle_x[key] = 0
 
         self.silo.remove_box(box.box_id)
         box.position = None
         self.boxes_retrieved += 1
-        self._record_trace_event(
-            event_type="RETRIEVE",
-            box=box,
-            key=key,
-            start_time=event_start,
-            end_time=event_end,
-            box_from_x=pos.x,
-            box_to_x=0,
-            shuttle_from_x=cur_x,
-            shuttle_to_x=0,
-            from_position=pos,
-            to_position=None,
-            reason=(
-                f"{self.retrieval_algorithm.name} selecciono esta caja por coste de shuttle, "
-                "prioridad de pallet activo y penalizacion de bloqueos."
-            ),
-            decision=(
-                "La caja va a HEAD para palletizacion porque pertenece a uno de los "
-                "8 pallets activos y era una candidata eficiente en este instante."
-            ),
-        )
         return finish_time
 
     # =========================================================================
@@ -479,7 +159,45 @@ class ConcurrentManager:
     # =========================================================================
 
     def _find_best_store_position(self, box: Box, t: float) -> Optional[Position]:
-        return self.storage_algorithm.choose_position(self, box, t)
+        """Find best position for storing a box, preferring free shuttles."""
+        dest_per_aisle = defaultdict(int)
+        for bid in self.silo.get_boxes_for_destination(box.destination):
+            p = self.silo.get_box_position(bid)
+            if p:
+                dest_per_aisle[p.aisle] += 1
+
+        best = None
+        best_score = float('inf')
+
+        for aisle in range(1, NUM_AISLES + 1):
+            for y in range(1, NUM_Y + 1):
+                key = (aisle, y)
+                
+                # Only evaluate shuttles that are currently free
+                if self.shuttle_free_at[key] > t:
+                    continue
+                    
+                available = self.silo.get_available_positions_for_shuttle(aisle, y)
+                if not available:
+                    continue
+
+                pos = min(available, key=lambda p: (p.x, p.z))
+                cur_x = self.shuttle_x[key]
+
+                # Time cost (wait is 0 because we already filtered busy shuttles)
+                cycle = self._shuttle_move_cost(key, cur_x, 0) + \
+                        self._shuttle_move_cost(key, 0, pos.x)
+
+                # Scoring
+                z_pen = 0 if pos.z == 1 else 15
+                group_bonus = -min(dest_per_aisle.get(aisle, 0) * 2, 10)
+                score = cycle + z_pen + pos.x * 0.3 + group_bonus
+
+                if score < best_score:
+                    best_score = score
+                    best = pos
+
+        return best
 
     # =========================================================================
     # PALLET MANAGEMENT
@@ -513,12 +231,39 @@ class ConcurrentManager:
         if slots <= 0:
             return
 
-        chosen_destinations = self.pallet_algorithm.choose_destinations(self, slots)
+        active_dests = {p.destination for p in self.active_pallets}
 
-        for dest in chosen_destinations:
-            ids = sorted(self.silo.get_boxes_for_destination(dest))[:BOXES_PER_PALLET]
-            boxes = [self.all_boxes[bid] for bid in ids]
-            self.active_pallets.append(Pallet(destination=dest, boxes=boxes, reserved=True))
+        # [B] Dynamic threshold: if we have many free slots, be more aggressive
+        threshold = lookahead_threshold
+        eligible = [d for d in self.silo.get_destinations_with_enough_boxes(threshold)
+                    if d not in active_dests]
+
+        if not eligible:
+            return
+
+        # Score: prefer destinations with most boxes (closer to a full pallet)
+        # and lowest average retrieval distance
+        scored = []
+        for dest in eligible:
+            all_ids = list(self.silo.get_boxes_for_destination(dest))
+            count = len(all_ids)
+            ids = all_ids[:BOXES_PER_PALLET]
+            cost = 0
+            for bid in ids:
+                p = self.silo.get_box_position(bid)
+                if p:
+                    cost += HANDLING_TIME + p.x + HANDLING_TIME + p.x
+                    if self.silo.is_blocked(p):
+                        cost += 40
+            # Penalize destinations with fewer boxes (prefer those closest to 12)
+            fullness_bonus = -(count * 5)  # more boxes = lower cost = higher priority
+            scored.append((dest, cost + fullness_bonus, ids))
+        scored.sort(key=lambda x: x[1])
+
+        for dest, _, ids in scored[:slots]:
+            boxes = [self.all_boxes[bid] for bid in ids if bid in self.all_boxes]
+            if boxes:
+                self.active_pallets.append(Pallet(destination=dest, boxes=boxes, reserved=True))
 
     def _assign_all_retrievals(self, t: float) -> int:
         """
@@ -531,8 +276,9 @@ class ConcurrentManager:
 
         Returns the number of retrievals assigned.
         """
+        # Build candidate map: shuttle_key -> list of (cost, box, pallet)
         candidates: dict = defaultdict(list)
-        assigned_boxes: set = set()
+        assigned_boxes: set = set()  # avoid assigning same box twice
 
         for pallet in self.active_pallets:
             for box in pallet.boxes:
@@ -543,6 +289,7 @@ class ConcurrentManager:
                 pos = box.position
                 key = (pos.aisle, pos.y)
 
+                # Only consider free shuttles
                 if self.shuttle_free_at[key] > t:
                     continue
 
@@ -556,6 +303,8 @@ class ConcurrentManager:
         if not candidates:
             return 0
 
+        # [C] Round-robin by aisle: pick best candidate per free shuttle
+        # Sort each shuttle's candidates by cost
         assigned_keys: set = set()
         total_assigned = 0
 
@@ -572,8 +321,28 @@ class ConcurrentManager:
 
         return total_assigned
 
-    def _pick_best_retrieval(self, t: float):
-        return self.retrieval_algorithm.choose_box(self, t)
+    def _pick_best_retrieval(self, t: float) -> Optional[Tuple[Box, 'Pallet']]:
+        """Pick the cheapest box to retrieve across all active pallets (single pick)."""
+        best = None
+        best_cost = float('inf')
+
+        for pallet in self.active_pallets:
+            for box in pallet.boxes:
+                if box in pallet.retrieved or box.position is None:
+                    continue
+                pos = box.position
+                key = (pos.aisle, pos.y)
+                cur_x = self.shuttle_x[key]
+                wait = max(0, self.shuttle_free_at[key] - t)
+                cost = wait + self._shuttle_move_cost(key, cur_x, pos.x) + \
+                       self._shuttle_move_cost(key, pos.x, 0)
+                if self.silo.is_blocked(pos):
+                    cost += 40
+                if cost < best_cost:
+                    best_cost = cost
+                    best = (box, pallet)
+
+        return best
 
     # =========================================================================
     # MAIN SIMULATION LOOP
@@ -704,7 +473,6 @@ class ConcurrentManager:
 
         result = self._build_metrics(incoming_boxes, pending_input)
         result['snapshots'] = self.snapshots
-        result['trace_events'] = self.trace_events
         return result
 
     def _take_snapshot(self, pending_input):
@@ -772,13 +540,9 @@ class ConcurrentManager:
         }
 
 
-def run_concurrent_from_csv(
-    csv_path: str,
-    num_incoming: int = 1000,
-    num_destinations: int = 20,
-    algorithm_config: str = "baseline",
-    verbose: bool = True,
-):
+def run_concurrent_from_csv(csv_path: str, num_incoming: int = 1000,
+                            num_destinations: int = 20,
+                            verbose: bool = True) -> dict:
     """
     Run concurrent simulation:
     1. Load initial silo from CSV.
@@ -799,18 +563,8 @@ def run_concurrent_from_csv(
     # Initialize
     silo = Silo()
     shuttle_mgr = ShuttleManager()
+    manager = ConcurrentManager(silo, shuttle_mgr)
 
-    storage_alg, pallet_alg, retrieval_alg = build_algorithms(algorithm_config)
-
-    manager = ConcurrentManager(
-        silo,
-        shuttle_mgr,
-        storage_algorithm=storage_alg,
-        pallet_algorithm=pallet_alg,
-        retrieval_algorithm=retrieval_alg,
-    )
-    if verbose:
-        print(f"  Algorithm config: {algorithm_config}")
     # Load CSV
     if verbose:
         print(f"\n--- Loading initial silo state ---")
@@ -821,7 +575,6 @@ def run_concurrent_from_csv(
     # Register pre-loaded boxes
     manager.all_boxes.update(all_boxes)
     manager.boxes_stored = stats["loaded"]
-    manager.record_initial_state(all_boxes)
 
     if verbose:
         print(f"  Pre-loaded: {stats['loaded']} boxes ({silo.occupancy_rate:.1%} occupancy)")
@@ -829,7 +582,7 @@ def run_concurrent_from_csv(
         print(f"  Destinations ready: {len(ready)}")
 
     # Get existing destinations from silo
-    existing_dests = sorted(set(b.destination for b in all_boxes.values()))
+    existing_dests = list(set(b.destination for b in all_boxes.values()))
 
     # Generate incoming boxes using the same destinations
     if verbose:
@@ -857,9 +610,6 @@ def run_concurrent_from_csv(
     if verbose:
         print(f"\n--- FINAL CONCURRENT METRICS ---")
         for k, v in metrics.items():
-            if k == "snapshots":
-                print(f"  {'Snapshots':<25} {len(v)}")
-                continue
             label = k.replace('_', ' ').title()
             print(f"  {label:<25} {v}")
         print(f"  {'Real Compute Time':<25} {real_time:.2f}s")
@@ -871,7 +621,6 @@ def run_concurrent_from_csv(
 def run_continuous(csv_path: str, duration_hours: float = 8.0,
                    num_destinations: int = 20,
                    arrival_rate: int = BOX_ARRIVAL_RATE,
-                   algorithm_config: str = "baseline",
                    seed: int = 42,
                    verbose: bool = True,
                    algo_mode: str = "Optimized") -> dict:
@@ -919,16 +668,8 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
     # ── Initialize ────────────────────────────────────────────────────────────
     silo = Silo()
     shuttle_mgr = ShuttleManager()
+    manager = ConcurrentManager(silo, shuttle_mgr)
 
-    storage_alg, pallet_alg, retrieval_alg = build_algorithms(algorithm_config)
-
-    manager = ConcurrentManager(
-        silo,
-        shuttle_mgr,
-        storage_algorithm=storage_alg,
-        pallet_algorithm=pallet_alg,
-        retrieval_algorithm=retrieval_alg,
-    )
     if verbose:
         print(f"\n--- Loading initial silo state ---")
 
@@ -937,8 +678,7 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
     stats = result["stats"]
     manager.all_boxes.update(all_boxes)
     manager.boxes_stored = stats["loaded"]
-    manager.record_initial_state(all_boxes)
-    existing_dests = sorted(set(b.destination for b in all_boxes.values()))
+    existing_dests = list(set(b.destination for b in all_boxes.values()))
 
     if verbose:
         print(f"  Pre-loaded: {stats['loaded']} boxes ({silo.occupancy_rate:.1%} occupancy)")
@@ -1136,7 +876,6 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
         "shuttle_max_time": f"{max_stime:.1f}s",
         "shuttle_avg_time": f"{avg_stime:.1f}s",
         "snapshots": manager.snapshots,
-        "trace_events": manager.trace_events,
     }
 
     if verbose:

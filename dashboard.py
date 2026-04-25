@@ -11,23 +11,12 @@ import pandas as pd
 import time
 import random
 import os
-from pathlib import Path
 
 from models import Box
 from silo import Silo
 from shuttle import ShuttleManager
-from concurrent_sim import (
-    ConcurrentManager,
-    available_algorithm_configs,
-    build_algorithms,
-)
+from concurrent_sim import ConcurrentManager, BOX_INTERVAL, run_continuous
 from csv_loader import load_silo_from_csv
-from warehouse_chatbot import (
-    DEFAULT_MODEL,
-    ask_gemma,
-    build_warehouse_context,
-    fallback_answer,
-)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE CONFIG
@@ -109,64 +98,36 @@ st.markdown("""
 # SIMULATION RUNNER (cached)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner="Running simulation...")
-def run_simulation(csv_path, num_incoming, num_destinations, seed, algorithm_config):
-    """Run the concurrent simulation and return snapshots."""
-    random.seed(seed)
-    silo = Silo()
-    shuttle_mgr = ShuttleManager()
-    storage_alg, pallet_alg, retrieval_alg = build_algorithms(algorithm_config)
-    manager = ConcurrentManager(
-        silo,
-        shuttle_mgr,
-        storage_algorithm=storage_alg,
-        pallet_algorithm=pallet_alg,
-        retrieval_algorithm=retrieval_alg,
-    )
+def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_mode):
+    """Run the selected simulation mode and return snapshots."""
+    if mode == "Continuous":
+        return run_continuous(csv_path, num_destinations=num_destinations,
+                              duration_hours=duration_hours, arrival_rate=arrival_rate, verbose=True, algo_mode=algo_mode)
+    else:
+        random.seed(seed)
+        silo = Silo()
+        shuttle_mgr = ShuttleManager()
+        manager = ConcurrentManager(silo, shuttle_mgr)
 
-    # Load CSV
-    result = load_silo_from_csv(csv_path, silo)
-    all_boxes = result["all_boxes"]
-    stats = result["stats"]
-    manager.all_boxes.update(all_boxes)
-    manager.boxes_stored = stats["loaded"]
-    manager.record_initial_state(all_boxes)
+        result = load_silo_from_csv(csv_path, silo)
+        all_boxes = result["all_boxes"]
+        stats = result["stats"]
+        manager.all_boxes.update(all_boxes)
+        manager.boxes_stored = stats["loaded"]
 
-    # Get existing destinations
-    existing_dests = sorted(set(b.destination for b in all_boxes.values()))
+        existing_dests = list(set(b.destination for b in all_boxes.values()))
 
-    incoming = []
-    source = "3055769"
-    for i in range(num_incoming):
-        dest = random.choice(existing_dests[:num_destinations])
-        bulk = 90000 + i
-        box_id = f"{source}{dest}{bulk:05d}"
-        incoming.append(Box.from_id(box_id))
+        incoming = []
+        source = "3055769"
+        for i in range(num_incoming):
+            dest = random.choice(existing_dests[:num_destinations])
+            bulk = 90000 + i
+            box_id = f"{source}{dest}{bulk:05d}"
+            incoming.append(Box.from_id(box_id))
 
-    metrics = manager.run(incoming, verbose=False)
-    return metrics
+        metrics = manager.run(incoming, verbose=False)
+        return metrics
 
-
-
-TRACE_COLORS = {
-    "INITIAL": "#95a5a6",
-    "STORE": "#00b894",
-    "RETRIEVE": "#e17055",
-    "RELOCATE": "#a29bfe",
-    "RETRIEVE_BLOCKER": "#fdcb6e",
-}
-
-PROJECT_STORY_PATH = Path(__file__).with_name("PROJECT_STORY.md")
-
-
-def load_project_story():
-    """Load the shared project documentation used by Streamlit and Devpost."""
-    if PROJECT_STORY_PATH.exists():
-        return PROJECT_STORY_PATH.read_text(encoding="utf-8")
-    return (
-        "# Hack the Flow\n\n"
-        "Real-time warehouse flow optimizer that schedules 32 shuttles to store, "
-        "retrieve, and relocate boxes efficiently in automated silos."
-    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -283,303 +244,6 @@ def build_pending_chart(df):
     return fig
 
 
-def build_trace_timeline_chart(trace_df, mode, selected_id, current_time):
-    id_col = "box_id" if mode == "Box" else "shuttle_id"
-    x_from_col = "box_from_x" if mode == "Box" else "shuttle_from_x"
-    x_to_col = "box_to_x" if mode == "Box" else "shuttle_to_x"
-    focus = trace_df[trace_df[id_col] == selected_id].sort_values("start_time")
-
-    fig = go.Figure()
-    for _, event in focus.iterrows():
-        color = TRACE_COLORS.get(event["event_type"], "#667eea")
-        name = event["event_type"]
-        if event["event_type"] == "INITIAL":
-            fig.add_trace(go.Scatter(
-                x=[event["start_min"]],
-                y=[event[x_to_col]],
-                mode="markers",
-                marker=dict(color=color, size=9),
-                name=name,
-                text=[event["decision"]],
-                hovertemplate="t=%{x:.2f} min<br>X=%{y}<br>%{text}<extra></extra>",
-                showlegend=False,
-            ))
-            continue
-
-        fig.add_trace(go.Scatter(
-            x=[event["start_min"], event["end_min"]],
-            y=[event[x_from_col], event[x_to_col]],
-            mode="lines+markers",
-            line=dict(color=color, width=4),
-            marker=dict(color=color, size=7),
-            name=name,
-            text=[event["reason"], event["decision"]],
-            hovertemplate="t=%{x:.2f} min<br>X=%{y}<br>%{text}<extra></extra>",
-            showlegend=False,
-        ))
-
-    if not focus.empty:
-        fig.add_vline(
-            x=current_time / 60.0,
-            line_dash="dot",
-            line_color="#ffffff",
-            annotation_text="now",
-            annotation_position="top",
-        )
-
-    chart_layout(fig, f"{mode} route over time: {selected_id}", height=330)
-    fig.update_yaxes(title="X coordinate", range=[-2, 62])
-    return fig
-
-
-def build_trace_lane_chart(trace_df, mode, selected_id, current_time):
-    id_col = "box_id" if mode == "Box" else "shuttle_id"
-    x_from_col = "box_from_x" if mode == "Box" else "shuttle_from_x"
-    x_to_col = "box_to_x" if mode == "Box" else "shuttle_to_x"
-    focus = trace_df[trace_df[id_col] == selected_id].sort_values("start_time")
-
-    fig = go.Figure()
-    tick_values = []
-    tick_text = []
-    for _, event in focus.iterrows():
-        lane = (int(event["aisle"]) - 1) * 8 + int(event["y"])
-        lane_label = f"A{int(event['aisle'])}-Y{int(event['y'])}"
-        if lane not in tick_values:
-            tick_values.append(lane)
-            tick_text.append(lane_label)
-        color = TRACE_COLORS.get(event["event_type"], "#667eea")
-        fig.add_trace(go.Scatter(
-            x=[event[x_from_col], event[x_to_col]],
-            y=[lane, lane],
-            mode="lines+markers",
-            line=dict(color=color, width=5),
-            marker=dict(color=color, size=8),
-            text=[event["from_position"], event["to_position"]],
-            hovertemplate="X=%{x}<br>Lane=%{y}<br>%{text}<extra></extra>",
-            showlegend=False,
-        ))
-
-    active = focus[
-        (focus["start_time"] <= current_time) &
-        (focus["end_time"] >= current_time) &
-        (focus["duration"] > 0)
-    ]
-    if not active.empty:
-        event = active.iloc[-1]
-        progress = (current_time - event["start_time"]) / max(event["duration"], 0.001)
-        x_now = event[x_from_col] + (event[x_to_col] - event[x_from_col]) * progress
-        lane = (int(event["aisle"]) - 1) * 8 + int(event["y"])
-        fig.add_trace(go.Scatter(
-            x=[x_now],
-            y=[lane],
-            mode="markers",
-            marker=dict(color="#ffffff", size=16, symbol="diamond"),
-            name="current",
-            hovertemplate="Current X=%{x:.1f}<extra></extra>",
-            showlegend=False,
-        ))
-
-    chart_layout(fig, f"Lane zoom: {selected_id}", height=330)
-    fig.update_xaxes(title="X coordinate", range=[-2, 62])
-    fig.update_yaxes(title="Lane", tickmode="array", tickvals=tick_values, ticktext=tick_text)
-    return fig
-
-
-def build_trace_context(trace_df, mode, selected_id, current_time):
-    id_col = "box_id" if mode == "Box" else "shuttle_id"
-    focus = trace_df[trace_df[id_col] == selected_id].sort_values("start_time")
-    if focus.empty:
-        return ""
-
-    active = focus[
-        (focus["start_time"] <= current_time) &
-        (focus["end_time"] >= current_time) &
-        (focus["duration"] > 0)
-    ]
-    if not active.empty:
-        event = active.iloc[-1]
-        state = "currently moving"
-    else:
-        past = focus[focus["end_time"] <= current_time]
-        if not past.empty:
-            event = past.iloc[-1]
-            state = "last completed movement"
-        else:
-            event = focus.iloc[0]
-            state = "next scheduled/known movement"
-
-    return (
-        f"- Focus mode: {mode}\n"
-        f"- Selected id: {selected_id}\n"
-        f"- Route state: {state}\n"
-        f"- Event type: {event['event_type']}\n"
-        f"- Box id: {event['box_id']}\n"
-        f"- Destination: {event['destination']}\n"
-        f"- Shuttle: {event['shuttle_id']}\n"
-        f"- From: {event['from_position']} to {event['to_position']}\n"
-        f"- X route box: {event['box_from_x']} -> {event['box_to_x']}\n"
-        f"- X route shuttle: {event['shuttle_from_x']} -> {event['shuttle_to_x']}\n"
-        f"- Time window: {event['start_min']:.2f} to {event['end_min']:.2f} min\n"
-        f"- Reason: {event['reason']}\n"
-        f"- Decision: {event['decision']}"
-    )
-
-
-def get_shuttle_frame(trace_df, current_time):
-    """Interpolate every shuttle position at the selected simulation time."""
-    rows = []
-    for aisle in range(1, 5):
-        for y in range(1, 9):
-            shuttle_id = f"A{aisle}_Y{y}"
-            events = trace_df[
-                (trace_df["shuttle_id"] == shuttle_id) &
-                (trace_df["event_type"] != "INITIAL")
-            ].sort_values("start_time")
-
-            active = events[
-                (events["start_time"] <= current_time) &
-                (events["end_time"] >= current_time) &
-                (events["duration"] > 0)
-            ]
-            if not active.empty:
-                event = active.iloc[-1]
-                progress = (current_time - event["start_time"]) / max(event["duration"], 0.001)
-                x = event["shuttle_from_x"] + (event["shuttle_to_x"] - event["shuttle_from_x"]) * progress
-                state = "MOVING"
-            else:
-                past = events[events["end_time"] <= current_time]
-                if not past.empty:
-                    event = past.iloc[-1]
-                    x = event["shuttle_to_x"]
-                else:
-                    event = None
-                    x = 0
-                state = "IDLE"
-
-            lane = (aisle - 1) * 8 + y
-            if event is None:
-                event_type = "IDLE"
-                box_id = ""
-                destination = ""
-                decision = "Shuttle esperando en cabecera."
-                reason = "Aun no tiene movimientos asignados en este instante."
-            else:
-                event_type = event["event_type"]
-                box_id = event["box_id"]
-                destination = event["destination"]
-                decision = event["decision"]
-                reason = event["reason"]
-
-            rows.append({
-                "shuttle_id": shuttle_id,
-                "aisle": aisle,
-                "y": y,
-                "lane": lane,
-                "lane_label": f"A{aisle}-Y{y}",
-                "x": x,
-                "state": state,
-                "event_type": event_type,
-                "box_id": box_id,
-                "destination": destination,
-                "decision": decision,
-                "reason": reason,
-            })
-    return pd.DataFrame(rows)
-
-
-def build_live_shuttle_map(trace_df, current_time, selected_shuttle=None):
-    shuttle_df = get_shuttle_frame(trace_df, current_time)
-    marker_colors = shuttle_df["state"].map({
-        "MOVING": "#00cec9",
-        "IDLE": "#636e72",
-    }).fillna("#667eea")
-    marker_sizes = [
-        20 if sid == selected_shuttle else (15 if state == "MOVING" else 11)
-        for sid, state in zip(shuttle_df["shuttle_id"], shuttle_df["state"])
-    ]
-    marker_symbols = [
-        "diamond" if sid == selected_shuttle else "circle"
-        for sid in shuttle_df["shuttle_id"]
-    ]
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=shuttle_df["x"],
-        y=shuttle_df["lane"],
-        mode="markers+text",
-        marker=dict(
-            color=marker_colors,
-            size=marker_sizes,
-            symbol=marker_symbols,
-            line=dict(color="#ffffff", width=1),
-        ),
-        text=shuttle_df["shuttle_id"],
-        textposition="top center",
-        customdata=shuttle_df[[
-            "shuttle_id",
-            "state",
-            "event_type",
-            "box_id",
-            "destination",
-            "decision",
-        ]],
-        hovertemplate=(
-            "<b>%{customdata[0]}</b><br>"
-            "X=%{x:.1f}<br>"
-            "State=%{customdata[1]}<br>"
-            "Event=%{customdata[2]}<br>"
-            "Box=%{customdata[3]}<br>"
-            "Dest=%{customdata[4]}<br>"
-            "%{customdata[5]}<extra></extra>"
-        ),
-        selected=dict(marker=dict(size=22, color="#fdcb6e")),
-        unselected=dict(marker=dict(opacity=0.75)),
-    ))
-
-    for aisle in range(1, 5):
-        fig.add_hrect(
-            y0=(aisle - 1) * 8 + 0.5,
-            y1=aisle * 8 + 0.5,
-            fillcolor="rgba(102,126,234,0.06)" if aisle % 2 else "rgba(0,206,201,0.04)",
-            line_width=0,
-            layer="below",
-        )
-        fig.add_annotation(
-            x=61,
-            y=(aisle - 1) * 8 + 4.5,
-            text=f"Aisle {aisle}",
-            showarrow=False,
-            font=dict(color="#aaa", size=11),
-        )
-
-    chart_layout(fig, "Live Shuttle Map - click a shuttle to pause and inspect", height=520)
-    fig.update_xaxes(title="X coordinate", range=[-2, 64], dtick=5)
-    fig.update_yaxes(
-        title="Shuttle lane",
-        tickmode="array",
-        tickvals=shuttle_df["lane"].tolist(),
-        ticktext=shuttle_df["lane_label"].tolist(),
-        autorange="reversed",
-    )
-    fig.update_layout(clickmode="event+select", showlegend=False)
-    return fig, shuttle_df
-
-
-def extract_selected_shuttle(plotly_state):
-    """Read selected shuttle id from Streamlit Plotly selection state."""
-    try:
-        selection = plotly_state.get("selection", {})
-    except AttributeError:
-        selection = getattr(plotly_state, "selection", {})
-    points = selection.get("points", []) if selection else []
-    if not points:
-        return None
-    customdata = points[0].get("customdata")
-    if isinstance(customdata, (list, tuple)) and customdata:
-        return customdata[0]
-    return None
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────────────────────────────────────────
@@ -591,47 +255,29 @@ with st.sidebar:
 
     csv_path = st.text_input("CSV File", value="silo-semi-empty.csv")
     num_destinations = st.slider("Destinations", 5, 80, 20)
-    num_incoming = st.slider("Incoming Boxes", 200, 5000, 1000, step=100)
-    algorithm_config = st.selectbox(
-        "Algorithm",
-        available_algorithm_configs(),
-        index=available_algorithm_configs().index("nearest_head"),
-    )
+
+    if sim_mode == "Concurrent (Finite)":
+        num_incoming = st.slider("Incoming Boxes", 200, 5000, 1000, step=100)
+        duration_hours = 0.0
+        arrival_rate = 0
+    else:
+        num_incoming = 0
+        duration_hours = st.slider("Duration (Hours)", 0.5, 8.0, 2.0, step=0.5)
+        arrival_rate = st.slider("Arrival Rate (boxes/h)", 500, 3000, 1000, step=100)
+
     seed = st.number_input("Random Seed", value=42, step=1)
     playback_speed = st.slider("Playback Speed", 1, 50, 10, help="Snapshots per second during playback")
 
     st.markdown("---")
-    run_btn = st.button("Run Simulation", type="primary", use_container_width=True)
-
+    run_btn = st.button("Run Simulation", type="primary", width='stretch')
     st.markdown("---")
-    st.markdown("### Warehouse Chat")
-    ai_model = st.text_input("Model", value=DEFAULT_MODEL)
-    api_key_input = st.text_input(
-        "API key",
-        value="",
-        type="password",
-        help="Uses MLH_GEMMA_API_KEY or GEMINI_API_KEY if left empty.",
-    )
-    detected_api_key = bool(
-        api_key_input
-        or os.getenv("MLH_GEMMA_API_KEY")
-        or os.getenv("GEMINI_API_KEY")
-    )
-    if detected_api_key:
-        st.success("API key detected")
+    
+    st.markdown("**Algorithms Info:**")
+    if "Optimized" in algo_mode:
+        st.markdown("- **Lookahead:** Dynamic (≥8 boxes)\n- **Output:** 32 Shuttles Parallel\n- **Gate:** Competitive\n- **State:** Hash Maps O(1)")
     else:
-        st.warning("No API key detected")
-    st.markdown("---")
-    st.markdown("""
-    **Algorithms:**
-    - Input: Selected strategy
-    - Output: Dynamic pallet priority
-    - Z-Relocation: Opportunistic when useful
-    - State: Hash Maps (O(1))
-    """)
-    st.markdown("---")
-    with st.expander("About Hack the Flow", expanded=False):
-        st.markdown(load_project_story())
+        st.markdown("- **Lookahead:** Strict (12 boxes)\n- **Output:** Sequential (1 Shuttle max/tick)\n- **Gate:** Occupancy > 50%\n- **State:** Hash Maps O(1)")
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -648,21 +294,14 @@ if not os.path.exists(csv_path):
 
 # Run or use cached simulation
 if run_btn or 'sim_result' not in st.session_state:
-    with st.spinner("Running concurrent simulation..."):
-        result = run_simulation(
-            csv_path,
-            num_incoming,
-            num_destinations,
-            seed,
-            algorithm_config,
-        )
+    with st.spinner(f"Running {sim_mode}..."):
+        mode_str = "Continuous" if "Continuous" in sim_mode else "Concurrent"
+        algo_str = "Naive" if "Naive" in algo_mode else "Optimized"
+        result = run_simulation(mode_str, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_str)
         st.session_state.sim_result = result
-        st.session_state.algorithm_config = algorithm_config
         st.session_state.playback_idx = 0
-        st.session_state.chat_messages = []
 else:
     result = st.session_state.sim_result
-    algorithm_config = st.session_state.get("algorithm_config", algorithm_config)
 
 snapshots = result.get('snapshots', [])
 if not snapshots:
@@ -675,43 +314,22 @@ df = pd.DataFrame(snapshots)
 st.markdown("---")
 
 # Playback controls
-if "playing" not in st.session_state:
-    st.session_state.playing = False
-if "playback_idx" not in st.session_state:
-    st.session_state.playback_idx = 0
-
-col_ctrl1, col_ctrl2, col_ctrl3, col_ctrl4 = st.columns([1, 1, 4, 1])
+col_ctrl1, col_ctrl2, col_ctrl3 = st.columns([1, 3, 1])
 with col_ctrl1:
-    play_label = "Pause" if st.session_state.playing else "Play"
-    if st.button(play_label, use_container_width=True):
-        st.session_state.playing = not st.session_state.playing
-        st.rerun()
-with col_ctrl2:
-    if st.button("Step", use_container_width=True):
-        st.session_state.playing = False
-        st.session_state.playback_idx = min(st.session_state.playback_idx + 1, len(df) - 1)
-        st.rerun()
+    play_btn = st.button("▶ Play", width='stretch')
 with col_ctrl3:
-    frame_idx = st.slider(
-        "Timeline",
-        0,
-        len(df) - 1,
-        min(st.session_state.get('playback_idx', 0), len(df) - 1),
-    )
-    if frame_idx != st.session_state.playback_idx:
-        st.session_state.playback_idx = frame_idx
-        st.session_state.playing = False
-with col_ctrl4:
-    reset_btn = st.button("Reset", use_container_width=True)
+    reset_btn = st.button("↺ Reset", width='stretch')
 
+with col_ctrl2:
+    frame_idx = st.slider("Timeline", 0, len(df) - 1,
+                           st.session_state.get('playback_idx', len(df) - 1),
+                           key="timeline_slider")
 
 if reset_btn:
-    st.session_state.playing = False
     st.session_state.playback_idx = 0
     st.rerun()
 
 # Get current frame data
-frame_idx = st.session_state.playback_idx
 current = df.iloc[frame_idx]
 df_up_to = df.iloc[:frame_idx + 1]
 
@@ -738,51 +356,6 @@ k4.metric("Occupancy", f"{current['occupancy_pct']:.1f}%")
 k5.metric("Pending Input", int(current['pending_input']))
 k6.metric("Relocations", int(current['relocations']))
 
-trace_events = result.get("trace_events", [])
-trace_df = pd.DataFrame(trace_events) if trace_events else pd.DataFrame()
-selected_trace_context = ""
-
-# LIVE SHUTTLE MAP
-st.markdown("---")
-st.markdown("### Live Shuttle Movement")
-st.caption("Each point is one shuttle. Moving shuttles are highlighted; click one to pause playback and inspect its route.")
-
-if trace_df.empty:
-    st.info("Run the simulation again to collect detailed shuttle movements.")
-else:
-    selected_shuttle_for_map = st.session_state.get("selected_shuttle_id")
-    shuttle_map, shuttle_frame = build_live_shuttle_map(
-        trace_df,
-        float(current["time"]),
-        selected_shuttle_for_map,
-    )
-    shuttle_state = st.plotly_chart(
-        shuttle_map,
-        width="stretch",
-        key="live_shuttle_map",
-        on_select="rerun",
-        selection_mode="points",
-    )
-    clicked_shuttle = extract_selected_shuttle(shuttle_state)
-    if clicked_shuttle:
-        st.session_state.selected_shuttle_id = clicked_shuttle
-        st.session_state.trace_mode = "Shuttle"
-        st.session_state.trace_mode_radio = "Shuttle"
-        st.session_state.playing = False
-        selected_shuttle_for_map = clicked_shuttle
-
-    if selected_shuttle_for_map:
-        selected_row = shuttle_frame[shuttle_frame["shuttle_id"] == selected_shuttle_for_map]
-        if not selected_row.empty:
-            row = selected_row.iloc[0]
-            info_cols = st.columns(5)
-            info_cols[0].metric("Selected Shuttle", row["shuttle_id"])
-            info_cols[1].metric("State", row["state"])
-            info_cols[2].metric("X", f"{row['x']:.1f}")
-            info_cols[3].metric("Box", row["box_id"] or "None")
-            info_cols[4].metric("Destination", row["destination"] or "None")
-            st.markdown(f"**Decision:** {row['decision']}")
-
 # ─── CHARTS ─────────────────────────────────────────────────────────────────
 st.markdown("---")
 
@@ -804,146 +377,20 @@ with col5:
 with col6:
     st.plotly_chart(build_pending_chart(df_up_to), width='stretch')
 
+# ─── LIVE PLAYBACK LOOP ────────────────────────────────────────────────────
+if play_btn:
+    start_idx = st.session_state.get('playback_idx', 0)
+    kpi_placeholder = st.empty()
+    chart_placeholder = st.empty()
+    progress_bar = st.progress(start_idx / len(df))
 
-# ROUTE ZOOM
-st.markdown("---")
-st.markdown("### Route Zoom")
-st.caption("Search a box or shuttle, or click a shuttle in the live map. The white marker shows the selected route at the timeline time.")
+    for i in range(start_idx, len(df)):
+        st.session_state.playback_idx = i
+        progress_bar.progress(i / (len(df) - 1))
+        time.sleep(1.0 / playback_speed)
 
-if trace_df.empty:
-    st.info("Run the simulation again to collect detailed route events.")
-else:
-    current_time = float(current["time"])
-
-    zoom_col1, zoom_col2, zoom_col3 = st.columns([1, 2, 2])
-    with zoom_col1:
-        default_mode = st.session_state.get("trace_mode", "Shuttle")
-        trace_mode = st.radio(
-            "Track",
-            ["Box", "Shuttle"],
-            horizontal=True,
-            index=0 if default_mode == "Box" else 1,
-            key="trace_mode_radio",
-        )
-        st.session_state.trace_mode = trace_mode
-
-    if trace_mode == "Box":
-        moving = trace_df[
-            (trace_df["start_time"] <= current_time) &
-            (trace_df["end_time"] >= current_time) &
-            (trace_df["event_type"] != "INITIAL")
-        ]
-        box_options = sorted(trace_df["box_id"].dropna().unique())
-        if st.session_state.get("selected_box_id") in box_options:
-            default_box = st.session_state.selected_box_id
-        else:
-            default_box = moving["box_id"].iloc[0] if not moving.empty else box_options[0]
-        with zoom_col2:
-            box_search = st.text_input(
-                "Search box",
-                value=st.session_state.get("box_search", ""),
-                placeholder="Type box id or destination...",
-            ).strip()
-            st.session_state.box_search = box_search
-            if box_search:
-                filtered_boxes = [
-                    bid for bid in box_options
-                    if box_search.lower() in bid.lower()
-                    or box_search.lower() in str(
-                        trace_df.loc[trace_df["box_id"] == bid, "destination"].iloc[0]
-                    ).lower()
-                ][:200]
-            else:
-                filtered_boxes = box_options[:200]
-                if default_box not in filtered_boxes:
-                    filtered_boxes = [default_box] + filtered_boxes[:199]
-            if not filtered_boxes:
-                st.warning("No matching boxes.")
-                filtered_boxes = [default_box]
-            default_index = filtered_boxes.index(default_box) if default_box in filtered_boxes else 0
-            selected_trace_id = st.selectbox(
-                "Matching boxes",
-                filtered_boxes,
-                index=default_index,
-            )
-            st.session_state.selected_box_id = selected_trace_id
-    else:
-        shuttle_options = sorted(trace_df["shuttle_id"].dropna().unique())
-        busy = trace_df[
-            (trace_df["start_time"] <= current_time) &
-            (trace_df["end_time"] >= current_time) &
-            (trace_df["event_type"] != "INITIAL")
-        ]
-        if st.session_state.get("selected_shuttle_id") in shuttle_options:
-            default_shuttle = st.session_state.selected_shuttle_id
-        else:
-            default_shuttle = busy["shuttle_id"].iloc[0] if not busy.empty else shuttle_options[0]
-        with zoom_col2:
-            shuttle_search = st.text_input(
-                "Search shuttle",
-                value=st.session_state.get("shuttle_search", ""),
-                placeholder="Example: A2_Y5",
-            ).strip()
-            st.session_state.shuttle_search = shuttle_search
-            if shuttle_search:
-                filtered_shuttles = [
-                    sid for sid in shuttle_options
-                    if shuttle_search.lower() in sid.lower()
-                ]
-            else:
-                filtered_shuttles = shuttle_options
-            if default_shuttle not in filtered_shuttles:
-                filtered_shuttles = [default_shuttle] + filtered_shuttles
-            default_index = filtered_shuttles.index(default_shuttle) if default_shuttle in filtered_shuttles else 0
-            selected_trace_id = st.selectbox(
-                "Matching shuttles",
-                filtered_shuttles,
-                index=default_index,
-            )
-            st.session_state.selected_shuttle_id = selected_trace_id
-
-    selected_trace_context = build_trace_context(
-        trace_df,
-        trace_mode,
-        selected_trace_id,
-        current_time,
-    )
-    with zoom_col3:
-        if selected_trace_context:
-            compact_context = selected_trace_context.replace("\n", "  \n")
-            st.markdown(compact_context)
-
-    route_col1, route_col2 = st.columns(2)
-    with route_col1:
-        st.plotly_chart(
-            build_trace_timeline_chart(trace_df, trace_mode, selected_trace_id, current_time),
-            use_container_width=True,
-        )
-    with route_col2:
-        st.plotly_chart(
-            build_trace_lane_chart(trace_df, trace_mode, selected_trace_id, current_time),
-            use_container_width=True,
-        )
-
-    selected_events = trace_df[
-        trace_df["box_id" if trace_mode == "Box" else "shuttle_id"] == selected_trace_id
-    ].sort_values("start_time")
-    with st.expander("Movement log for selected route", expanded=False):
-        st.dataframe(
-            selected_events[[
-                "event_type",
-                "start_min",
-                "end_min",
-                "box_id",
-                "destination",
-                "shuttle_id",
-                "from_position",
-                "to_position",
-                "reason",
-            ]].tail(20),
-            use_container_width=True,
-            hide_index=True,
-        )
+    st.session_state.playback_idx = len(df) - 1
+    st.rerun()
 
 # ─── FINAL SUMMARY ─────────────────────────────────────────────────────────
 st.markdown("---")
@@ -964,60 +411,3 @@ with st.expander("Final Simulation Summary", expanded=False):
         st.write(f"- Relocations: {result.get('total_relocations', 'N/A')}")
         st.write(f"- Remaining in silo: {result.get('remaining_in_silo', 'N/A')}")
         st.write(f"- Shuttle max time: {result.get('shuttle_max_time', 'N/A')}")
-
-
-# CHATBOT
-st.markdown("---")
-st.markdown("### Talk to the warehouse")
-st.caption("Ask why the system is prioritizing a pallet, what causes relocations, or how the current algorithm thinks.")
-
-if "chat_messages" not in st.session_state:
-    st.session_state.chat_messages = []
-
-for message in st.session_state.chat_messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-operator_question = st.chat_input("Ask the silo what it is doing...")
-if operator_question:
-    st.session_state.chat_messages.append({"role": "user", "content": operator_question})
-    with st.chat_message("user"):
-        st.markdown(operator_question)
-
-    current_context = build_warehouse_context(
-        result,
-        current.to_dict(),
-        algorithm_config,
-        focus_context=selected_trace_context,
-    )
-    api_key = (
-        api_key_input
-        or os.getenv("MLH_GEMMA_API_KEY")
-        or os.getenv("GEMINI_API_KEY")
-    )
-
-    with st.chat_message("assistant"):
-        with st.spinner("The warehouse is thinking..."):
-            try:
-                answer = ask_gemma(
-                    operator_question,
-                    current_context,
-                    api_key=api_key,
-                    model=ai_model or DEFAULT_MODEL,
-                )
-            except Exception as exc:
-                answer = fallback_answer(operator_question, current_context, algorithm_config)
-                answer += f"\n\n_API unavailable, using local explanation. Detail: {exc}_"
-            st.markdown(answer)
-
-    st.session_state.chat_messages.append({"role": "assistant", "content": answer})
-
-
-# Real-time playback: render one frame per rerun so charts and shuttle map move.
-if st.session_state.get("playing", False):
-    if st.session_state.playback_idx < len(df) - 1:
-        time.sleep(1.0 / max(playback_speed, 1))
-        st.session_state.playback_idx += 1
-        st.rerun()
-    else:
-        st.session_state.playing = False
