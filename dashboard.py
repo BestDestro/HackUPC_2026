@@ -11,6 +11,27 @@ import pandas as pd
 import time
 import random
 import os
+import shutil
+from pathlib import Path
+
+DATA_DIR = Path("data")
+OUTPUTS_DIR = Path("outputs")
+CURRENT_CSV_PATH = OUTPUTS_DIR / "current_silo.csv"
+
+INITIAL_SCENARIOS = {
+    "original": {
+        "label": "Original - semi-empty",
+        "path": DATA_DIR / "silo-semi-empty.csv",
+    },
+    "medium": {
+        "label": "Medium - half full",
+        "path": DATA_DIR / "silo-medium.csv",
+    },
+    "nearly_full": {
+        "label": "Nearly full",
+        "path": DATA_DIR / "silo-nearly-full.csv",
+    },
+}
 
 from models import Box
 from silo import Silo
@@ -94,11 +115,33 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+
+
+def prepare_current_csv(scenario_key: str, force_reset: bool = False) -> Path:
+    """
+    Crea outputs/current_silo.csv copiando el CSV inicial elegido.
+    El original de data/ nunca se modifica.
+    """
+    scenario = INITIAL_SCENARIOS[scenario_key]
+    source_csv = scenario["path"]
+
+    if not source_csv.exists():
+        st.error(f"No existe el CSV del escenario: {source_csv}")
+        st.stop()
+
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    if force_reset or not CURRENT_CSV_PATH.exists():
+        shutil.copyfile(source_csv, CURRENT_CSV_PATH)
+
+    return CURRENT_CSV_PATH
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SIMULATION RUNNER (cached)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner="Running simulation...")
-def run_simulation(csv_path, num_incoming, num_destinations, seed):
+def run_simulation(csv_path, csv_version, num_incoming, num_destinations, seed):
     """Run the concurrent simulation and return snapshots."""
     random.seed(seed)
     silo = Silo()
@@ -242,31 +285,68 @@ def build_pending_chart(df):
                     gridcolor=GRID_COLOR, color='#a29bfe'))
     return fig
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
+    st.markdown("### Initial State")
+
+    scenario_key = st.selectbox(
+        "Initial CSV scenario",
+        options=list(INITIAL_SCENARIOS.keys()),
+        format_func=lambda key: INITIAL_SCENARIOS[key]["label"],
+    )
+
+    scenario_changed = st.session_state.get("scenario_key") != scenario_key
+
+    reset_current_state = st.button(
+        "Reset current state from selected CSV",
+        use_container_width=True,
+    )
+
+    if scenario_changed or reset_current_state:
+        prepare_current_csv(scenario_key, force_reset=True)
+
+        st.session_state["scenario_key"] = scenario_key
+
+        for key in [
+            "sim_result",
+            "csv_signature",
+            "playback_idx",
+            "timeline_slider",
+        ]:
+            if key in st.session_state:
+                del st.session_state[key]
+
+        st.cache_data.clear()
+        st.rerun()
+
+    # Esto tiene que estar FUERA del if anterior
+    csv_path = prepare_current_csv(scenario_key)
+
+    st.caption(f"Initial CSV: `{INITIAL_SCENARIOS[scenario_key]['path']}`")
+    st.caption(f"Current CSV: `{csv_path}`")
+
+    csv_stat_sidebar = Path(csv_path).stat()
+    st.caption(f"CSV version: `{csv_stat_sidebar.st_mtime_ns}-{csv_stat_sidebar.st_size}`")
+
+    st.markdown("---")
     st.markdown("### Simulation Parameters")
 
-    csv_path = st.text_input("CSV File", value="silo-semi-empty.csv")
     num_incoming = st.slider("Incoming Boxes", 200, 5000, 1000, step=100)
     num_destinations = st.slider("Destinations", 5, 80, 20)
     seed = st.number_input("Random Seed", value=42, step=1)
-    playback_speed = st.slider("Playback Speed", 1, 50, 10,
-                                help="Snapshots per second during playback")
+
+    playback_speed = st.slider(
+        "Playback Speed",
+        1,
+        50,
+        10,
+        help="Snapshots per second during playback",
+    )
 
     st.markdown("---")
     run_btn = st.button("Run Simulation", type="primary", use_container_width=True)
-    st.markdown("---")
-    st.markdown("""
-    **Algorithms:**
-    - Input: Chaotic Storage + Greedy
-    - Output: Dynamic Priority Extraction
-    - Z-Relocation: Opportunistic
-    - State: Hash Maps (O(1))
-    """)
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN DASHBOARD
@@ -276,15 +356,43 @@ st.markdown('<p class="subtitle">Real-time visualization of the logistics simula
             unsafe_allow_html=True)
 
 # Check if CSV exists
-if not os.path.exists(csv_path):
+if not Path(csv_path).exists():
     st.error(f"CSV file not found: {csv_path}")
     st.stop()
 
+
+csv_stat = Path(csv_path).stat()
+csv_version = f"{csv_stat.st_mtime_ns}-{csv_stat.st_size}"
+
+csv_signature = (
+    scenario_key,
+    str(csv_path),
+    csv_version,
+    num_incoming,
+    num_destinations,
+    int(seed),
+)
+
+
+previous_signature = st.session_state.get("csv_signature")
+scenario_has_changed = previous_signature != csv_signature
+
 # Run or use cached simulation
-if run_btn or 'sim_result' not in st.session_state:
+if run_btn or "sim_result" not in st.session_state or scenario_has_changed:
     with st.spinner("Running concurrent simulation..."):
-        result = run_simulation(csv_path, num_incoming, num_destinations, seed)
+        csv_stat = Path(csv_path).stat()
+        csv_version = f"{csv_stat.st_mtime_ns}-{csv_stat.st_size}"
+
+        result = run_simulation(
+            str(csv_path),
+            csv_version,
+            num_incoming,
+            num_destinations,
+            int(seed),
+        )
+
         st.session_state.sim_result = result
+        st.session_state.csv_signature = csv_signature
         st.session_state.playback_idx = 0
 else:
     result = st.session_state.sim_result
