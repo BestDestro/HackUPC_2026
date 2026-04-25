@@ -15,7 +15,7 @@ import os
 from models import Box
 from silo import Silo
 from shuttle import ShuttleManager
-from concurrent_sim import ConcurrentManager, BOX_INTERVAL
+from concurrent_sim import ConcurrentManager, BOX_INTERVAL, run_continuous
 from csv_loader import load_silo_from_csv
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -98,35 +98,36 @@ st.markdown("""
 # SIMULATION RUNNER (cached)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner="Running simulation...")
-def run_simulation(csv_path, num_incoming, num_destinations, seed):
-    """Run the concurrent simulation and return snapshots."""
-    random.seed(seed)
-    silo = Silo()
-    shuttle_mgr = ShuttleManager()
-    manager = ConcurrentManager(silo, shuttle_mgr)
+def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_mode):
+    """Run the selected simulation mode and return snapshots."""
+    if mode == "Continuous":
+        return run_continuous(csv_path, num_destinations=num_destinations,
+                              duration_hours=duration_hours, arrival_rate=arrival_rate, verbose=True, algo_mode=algo_mode)
+    else:
+        random.seed(seed)
+        silo = Silo()
+        shuttle_mgr = ShuttleManager()
+        manager = ConcurrentManager(silo, shuttle_mgr)
 
-    # Load CSV
-    result = load_silo_from_csv(csv_path, silo)
-    all_boxes = result["all_boxes"]
-    stats = result["stats"]
-    manager.all_boxes.update(all_boxes)
-    manager.boxes_stored = stats["loaded"]
+        result = load_silo_from_csv(csv_path, silo)
+        all_boxes = result["all_boxes"]
+        stats = result["stats"]
+        manager.all_boxes.update(all_boxes)
+        manager.boxes_stored = stats["loaded"]
 
-    # Get existing destinations
-    existing_dests = list(set(b.destination for b in all_boxes.values()))
+        existing_dests = list(set(b.destination for b in all_boxes.values()))
 
-    # Generate incoming boxes
-    incoming = []
-    source = "3055769"
-    for i in range(num_incoming):
-        dest = random.choice(existing_dests[:num_destinations])
-        bulk = 90000 + i
-        box_id = f"{source}{dest}{bulk:05d}"
-        incoming.append(Box.from_id(box_id))
+        incoming = []
+        source = "3055769"
+        for i in range(num_incoming):
+            dest = random.choice(existing_dests[:num_destinations])
+            bulk = 90000 + i
+            box_id = f"{source}{dest}{bulk:05d}"
+            incoming.append(Box.from_id(box_id))
 
-    # Run
-    metrics = manager.run(incoming, verbose=False)
-    return metrics
+        metrics = manager.run(incoming, verbose=False)
+        return metrics
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -249,23 +250,34 @@ def build_pending_chart(df):
 with st.sidebar:
     st.markdown("### Simulation Parameters")
 
+    sim_mode = st.radio("Operation Mode", ["Concurrent (Finite)", "Continuous (Infinite Flow)"])
+    algo_mode = st.radio("Algorithm Strategy", ["Optimized (Parallel + Lookahead)", "Naive (Legacy)"])
+
     csv_path = st.text_input("CSV File", value="silo-semi-empty.csv")
-    num_incoming = st.slider("Incoming Boxes", 200, 5000, 1000, step=100)
     num_destinations = st.slider("Destinations", 5, 80, 20)
+
+    if sim_mode == "Concurrent (Finite)":
+        num_incoming = st.slider("Incoming Boxes", 200, 5000, 1000, step=100)
+        duration_hours = 0.0
+        arrival_rate = 0
+    else:
+        num_incoming = 0
+        duration_hours = st.slider("Duration (Hours)", 0.5, 8.0, 2.0, step=0.5)
+        arrival_rate = st.slider("Arrival Rate (boxes/h)", 500, 3000, 1000, step=100)
+
     seed = st.number_input("Random Seed", value=42, step=1)
-    playback_speed = st.slider("Playback Speed", 1, 50, 10,
-                                help="Snapshots per second during playback")
+    playback_speed = st.slider("Playback Speed", 1, 50, 10, help="Snapshots per second during playback")
 
     st.markdown("---")
-    run_btn = st.button("Run Simulation", type="primary", use_container_width=True)
+    run_btn = st.button("Run Simulation", type="primary", width='stretch')
     st.markdown("---")
-    st.markdown("""
-    **Algorithms:**
-    - Input: Chaotic Storage + Greedy
-    - Output: Dynamic Priority Extraction
-    - Z-Relocation: Opportunistic
-    - State: Hash Maps (O(1))
-    """)
+    
+    st.markdown("**Algorithms Info:**")
+    if "Optimized" in algo_mode:
+        st.markdown("- **Lookahead:** Dynamic (≥8 boxes)\n- **Output:** 32 Shuttles Parallel\n- **Gate:** Competitive\n- **State:** Hash Maps O(1)")
+    else:
+        st.markdown("- **Lookahead:** Strict (12 boxes)\n- **Output:** Sequential (1 Shuttle max/tick)\n- **Gate:** Occupancy > 50%\n- **State:** Hash Maps O(1)")
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -282,8 +294,10 @@ if not os.path.exists(csv_path):
 
 # Run or use cached simulation
 if run_btn or 'sim_result' not in st.session_state:
-    with st.spinner("Running concurrent simulation..."):
-        result = run_simulation(csv_path, num_incoming, num_destinations, seed)
+    with st.spinner(f"Running {sim_mode}..."):
+        mode_str = "Continuous" if "Continuous" in sim_mode else "Concurrent"
+        algo_str = "Naive" if "Naive" in algo_mode else "Optimized"
+        result = run_simulation(mode_str, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_str)
         st.session_state.sim_result = result
         st.session_state.playback_idx = 0
 else:
@@ -302,9 +316,9 @@ st.markdown("---")
 # Playback controls
 col_ctrl1, col_ctrl2, col_ctrl3 = st.columns([1, 3, 1])
 with col_ctrl1:
-    play_btn = st.button("▶ Play", use_container_width=True)
+    play_btn = st.button("▶ Play", width='stretch')
 with col_ctrl3:
-    reset_btn = st.button("↺ Reset", use_container_width=True)
+    reset_btn = st.button("↺ Reset", width='stretch')
 
 with col_ctrl2:
     frame_idx = st.slider("Timeline", 0, len(df) - 1,
@@ -347,21 +361,21 @@ st.markdown("---")
 
 col1, col2 = st.columns(2)
 with col1:
-    st.plotly_chart(build_throughput_chart(df_up_to), use_container_width=True)
+    st.plotly_chart(build_throughput_chart(df_up_to), width='stretch')
 with col2:
-    st.plotly_chart(build_occupancy_chart(df_up_to), use_container_width=True)
+    st.plotly_chart(build_occupancy_chart(df_up_to), width='stretch')
 
 col3, col4 = st.columns(2)
 with col3:
-    st.plotly_chart(build_pallets_chart(df_up_to), use_container_width=True)
+    st.plotly_chart(build_pallets_chart(df_up_to), width='stretch')
 with col4:
-    st.plotly_chart(build_aisle_chart(df_up_to), use_container_width=True)
+    st.plotly_chart(build_aisle_chart(df_up_to), width='stretch')
 
 col5, col6 = st.columns(2)
 with col5:
-    st.plotly_chart(build_shuttle_chart(df_up_to), use_container_width=True)
+    st.plotly_chart(build_shuttle_chart(df_up_to), width='stretch')
 with col6:
-    st.plotly_chart(build_pending_chart(df_up_to), use_container_width=True)
+    st.plotly_chart(build_pending_chart(df_up_to), width='stretch')
 
 # ─── LIVE PLAYBACK LOOP ────────────────────────────────────────────────────
 if play_btn:

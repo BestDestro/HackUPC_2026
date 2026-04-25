@@ -172,6 +172,11 @@ class ConcurrentManager:
         for aisle in range(1, NUM_AISLES + 1):
             for y in range(1, NUM_Y + 1):
                 key = (aisle, y)
+                
+                # Only evaluate shuttles that are currently free
+                if self.shuttle_free_at[key] > t:
+                    continue
+                    
                 available = self.silo.get_available_positions_for_shuttle(aisle, y)
                 if not available:
                     continue
@@ -179,15 +184,14 @@ class ConcurrentManager:
                 pos = min(available, key=lambda p: (p.x, p.z))
                 cur_x = self.shuttle_x[key]
 
-                # Time cost
-                wait = max(0, self.shuttle_free_at[key] - t)
+                # Time cost (wait is 0 because we already filtered busy shuttles)
                 cycle = self._shuttle_move_cost(key, cur_x, 0) + \
                         self._shuttle_move_cost(key, 0, pos.x)
 
                 # Scoring
                 z_pen = 0 if pos.z == 1 else 15
                 group_bonus = -min(dest_per_aisle.get(aisle, 0) * 2, 10)
-                score = wait + cycle + z_pen + pos.x * 0.3 + group_bonus
+                score = cycle + z_pen + pos.x * 0.3 + group_bonus
 
                 if score < best_score:
                     best_score = score
@@ -197,12 +201,25 @@ class ConcurrentManager:
 
     # =========================================================================
     # PALLET MANAGEMENT
-    # =========================================================================
-
-    def _update_pallets(self):
-        """Fill active pallet slots from eligible destinations."""
+    def _update_pallets(self, lookahead_threshold: int = BOXES_PER_PALLET):
+        """
+        [B] Fill active pallet slots with lookahead.
+        Uses a dynamic threshold: activates pallets with >= lookahead_threshold boxes
+        instead of always waiting for the full BOXES_PER_PALLET.
+        This lets the system start extracting earlier when boxes are accumulating.
+        """
         still_active = []
         for p in self.active_pallets:
+            # Top up boxes if the pallet was created with lookahead (<12 boxes)
+            if len(p.boxes) < BOXES_PER_PALLET:
+                all_ids = list(self.silo.get_boxes_for_destination(p.destination))
+                current_ids = {b.box_id for b in p.boxes}
+                for bid in all_ids:
+                    if bid not in current_ids and bid in self.all_boxes:
+                        p.boxes.append(self.all_boxes[bid])
+                        if len(p.boxes) == BOXES_PER_PALLET:
+                            break
+
             if p.is_complete:
                 self.completed_pallets.append(p)
                 self.pallet_completion_times.append(self.sim_time)
@@ -215,13 +232,22 @@ class ConcurrentManager:
             return
 
         active_dests = {p.destination for p in self.active_pallets}
-        eligible = [d for d in self.silo.get_destinations_with_enough_boxes(BOXES_PER_PALLET)
+
+        # [B] Dynamic threshold: if we have many free slots, be more aggressive
+        threshold = lookahead_threshold
+        eligible = [d for d in self.silo.get_destinations_with_enough_boxes(threshold)
                     if d not in active_dests]
 
-        # Score by retrieval cost
+        if not eligible:
+            return
+
+        # Score: prefer destinations with most boxes (closer to a full pallet)
+        # and lowest average retrieval distance
         scored = []
         for dest in eligible:
-            ids = list(self.silo.get_boxes_for_destination(dest))[:BOXES_PER_PALLET]
+            all_ids = list(self.silo.get_boxes_for_destination(dest))
+            count = len(all_ids)
+            ids = all_ids[:BOXES_PER_PALLET]
             cost = 0
             for bid in ids:
                 p = self.silo.get_box_position(bid)
@@ -229,16 +255,74 @@ class ConcurrentManager:
                     cost += HANDLING_TIME + p.x + HANDLING_TIME + p.x
                     if self.silo.is_blocked(p):
                         cost += 40
-            scored.append((dest, cost))
+            # Penalize destinations with fewer boxes (prefer those closest to 12)
+            fullness_bonus = -(count * 5)  # more boxes = lower cost = higher priority
+            scored.append((dest, cost + fullness_bonus, ids))
         scored.sort(key=lambda x: x[1])
 
-        for dest, _ in scored[:slots]:
-            ids = list(self.silo.get_boxes_for_destination(dest))[:BOXES_PER_PALLET]
-            boxes = [self.all_boxes[bid] for bid in ids]
-            self.active_pallets.append(Pallet(destination=dest, boxes=boxes, reserved=True))
+        for dest, _, ids in scored[:slots]:
+            boxes = [self.all_boxes[bid] for bid in ids if bid in self.all_boxes]
+            if boxes:
+                self.active_pallets.append(Pallet(destination=dest, boxes=boxes, reserved=True))
+
+    def _assign_all_retrievals(self, t: float) -> int:
+        """
+        [A+C] Multi-shuttle parallel retrieval with round-robin by aisle.
+
+        Instead of picking a single best box globally, this method:
+        1. Groups pending boxes by (aisle, y) shuttle key
+        2. Picks the best candidate per shuttle (that is free at time t)
+        3. Assigns retrievals to ALL free shuttles simultaneously
+
+        Returns the number of retrievals assigned.
+        """
+        # Build candidate map: shuttle_key -> list of (cost, box, pallet)
+        candidates: dict = defaultdict(list)
+        assigned_boxes: set = set()  # avoid assigning same box twice
+
+        for pallet in self.active_pallets:
+            for box in pallet.boxes:
+                if box in pallet.retrieved or box.position is None:
+                    continue
+                if id(box) in assigned_boxes:
+                    continue
+                pos = box.position
+                key = (pos.aisle, pos.y)
+
+                # Only consider free shuttles
+                if self.shuttle_free_at[key] > t:
+                    continue
+
+                cur_x = self.shuttle_x[key]
+                cost = (self._shuttle_move_cost(key, cur_x, pos.x) +
+                        self._shuttle_move_cost(key, pos.x, 0))
+                if self.silo.is_blocked(pos):
+                    cost += 40
+                candidates[key].append((cost, box, pallet))
+
+        if not candidates:
+            return 0
+
+        # [C] Round-robin by aisle: pick best candidate per free shuttle
+        # Sort each shuttle's candidates by cost
+        assigned_keys: set = set()
+        total_assigned = 0
+
+        for key, cands in candidates.items():
+            if key in assigned_keys:
+                continue
+            cands.sort(key=lambda x: x[0])
+            _, box, pallet = cands[0]
+            self._execute_retrieve(box, t)
+            pallet.retrieved.append(box)
+            assigned_keys.add(key)
+            assigned_boxes.add(id(box))
+            total_assigned += 1
+
+        return total_assigned
 
     def _pick_best_retrieval(self, t: float) -> Optional[Tuple[Box, 'Pallet']]:
-        """Pick the cheapest box to retrieve across all active pallets."""
+        """Pick the cheapest box to retrieve across all active pallets (single pick)."""
         best = None
         best_cost = float('inf')
 
@@ -309,15 +393,23 @@ class ConcurrentManager:
                 pending_input.append(box)
                 next_arrival_idx += 1
 
-            # Update pallets
-            self._update_pallets()
+            # [B] Lookahead threshold: 8 when many slots free, else 12
+            lookahead = 8 if (MAX_ACTIVE_PALLETS - len(self.active_pallets)) >= 4 else BOXES_PER_PALLET
+            self._update_pallets(lookahead_threshold=lookahead)
 
-            # Assign tasks to free shuttles
+            # [A+C+D] Assign tasks to ALL free shuttles — output and input in parallel
             actions_taken = True
             while actions_taken:
                 actions_taken = False
 
-                # Try to store pending input boxes
+                # [A+C] Assign retrievals to ALL free shuttles simultaneously
+                self._update_pallets(lookahead_threshold=lookahead)
+                if self.active_pallets:
+                    n = self._assign_all_retrievals(self.sim_time)
+                    if n > 0:
+                        actions_taken = True
+
+                # Store pending input boxes (all free shuttles not already busy)
                 stored_boxes = []
                 for box in pending_input:
                     pos = self._find_best_store_position(box, self.sim_time)
@@ -329,19 +421,6 @@ class ConcurrentManager:
                             actions_taken = True
                 for b in stored_boxes:
                     pending_input.remove(b)
-
-                # Try to retrieve pallet boxes
-                self._update_pallets()
-                if self.active_pallets:
-                    pick = self._pick_best_retrieval(self.sim_time)
-                    if pick:
-                        box, pallet = pick
-                        pos = box.position
-                        key = (pos.aisle, pos.y)
-                        if self.shuttle_free_at[key] <= self.sim_time:
-                            self._execute_retrieve(box, self.sim_time)
-                            pallet.retrieved.append(box)
-                            actions_taken = True
 
             # Take snapshot every ~30 sim-seconds for dashboard
             if self.sim_time - self._last_snapshot_time >= 30:
@@ -543,7 +622,8 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
                    num_destinations: int = 20,
                    arrival_rate: int = BOX_ARRIVAL_RATE,
                    seed: int = 42,
-                   verbose: bool = True) -> dict:
+                   verbose: bool = True,
+                   algo_mode: str = "Optimized") -> dict:
     """
     CONTINUOUS FLOW simulation — the real operational scenario.
 
@@ -658,10 +738,6 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
                 box_counter += 1
                 next_arrival_time += interval
 
-        # Update pallets
-        manager._update_pallets()
-
-        # Assign free shuttles (prioritize: output if silo > 50%, else balance)
         occupancy = silo.occupancy_rate
         peak_occupancy = max(peak_occupancy, occupancy)
 
@@ -669,23 +745,41 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
         if occupancy > 0.85:
             overload_events.append({'time': sim_time, 'occupancy': occupancy})
 
+        # Strategy Selection
+        if algo_mode == "Naive":
+            lookahead = BOXES_PER_PALLET # Strict 12, no lookahead
+            allow_output = (occupancy > 0.50) or not input_active
+        else:
+            # [B] Dynamic lookahead: aggressive when many pallet slots free
+            lookahead = 8 if (MAX_ACTIVE_PALLETS - len(manager.active_pallets)) >= 4 else BOXES_PER_PALLET
+            allow_output = True
+
+        manager._update_pallets(lookahead_threshold=lookahead)
+
         actions_taken = True
         while actions_taken:
             actions_taken = False
 
-            # Priority: if silo filling up (>60%), prioritize output over input
-            if occupancy > 0.60 and manager.active_pallets:
-                pick = manager._pick_best_retrieval(sim_time)
-                if pick:
-                    box, pallet = pick
-                    pos = box.position
-                    key = (pos.aisle, pos.y)
-                    if manager.shuttle_free_at[key] <= sim_time:
-                        manager._execute_retrieve(box, sim_time)
-                        pallet.retrieved.append(box)
+            manager._update_pallets(lookahead_threshold=lookahead)
+            
+            if allow_output and manager.active_pallets:
+                if algo_mode == "Naive":
+                    # Simulate sequential constraint: assign max 1 retrieval per tick
+                    for p in manager.active_pallets:
+                        for b in p.boxes:
+                            if b not in p.retrieved and b.position:
+                                if manager.shuttle_free_at[(b.position.aisle, b.position.y)] <= sim_time:
+                                    manager._execute_retrieve(b, sim_time)
+                                    actions_taken = True
+                                    break
+                        if actions_taken: break
+                else:
+                    # [A+C] Assign retrievals to ALL free shuttles in parallel
+                    n = manager._assign_all_retrievals(sim_time)
+                    if n > 0:
                         actions_taken = True
 
-            # Store pending input boxes
+            # Store pending input boxes on remaining free shuttles
             stored_boxes = []
             for box in pending_input:
                 pos = manager._find_best_store_position(box, sim_time)
@@ -697,19 +791,6 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
                         actions_taken = True
             for b in stored_boxes:
                 pending_input.remove(b)
-
-            # Retrieve pallet boxes (normal priority)
-            manager._update_pallets()
-            if manager.active_pallets:
-                pick = manager._pick_best_retrieval(sim_time)
-                if pick:
-                    box, pallet = pick
-                    pos = box.position
-                    key = (pos.aisle, pos.y)
-                    if manager.shuttle_free_at[key] <= sim_time:
-                        manager._execute_retrieve(box, sim_time)
-                        pallet.retrieved.append(box)
-                        actions_taken = True
 
         # Snapshot every 60 sim-seconds (more granular for continuous mode)
         if sim_time - last_snapshot >= 60:
@@ -777,6 +858,7 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
         "mode": "continuous",
         "duration_hours": duration_hours,
         "sim_time_hours": f"{sim_time/3600:.2f}h",
+        "boxes_arrived": box_counter,
         "boxes_generated": box_counter,
         "boxes_stored": manager.boxes_stored,
         "boxes_retrieved": manager.boxes_retrieved,
@@ -785,6 +867,7 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
         "pallets_per_hour": f"{pallets_per_hour:.1f}",
         "boxes_out_per_hour": f"{boxes_per_hour_out:.0f}",
         "full_pallet_pct": f"{(pallets_done * 12 / max(manager.boxes_stored, 1)) * 100:.1f}%",
+        "avg_time_per_pallet": f"{max_stime / pallets_done:.1f}s" if pallets_done else "N/A",
         "total_relocations": manager.total_relocations,
         "peak_occupancy": f"{peak_occupancy:.1%}",
         "final_occupancy": f"{silo.occupancy_rate:.1%}",
