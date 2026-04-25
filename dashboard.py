@@ -125,11 +125,11 @@ st.markdown("""
 METRICS_VERSION = 4
 
 @st.cache_data(show_spinner="Running simulation...")
-def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_mode, metrics_version):
+def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_mode, simulate_failures, metrics_version):
     """Run the selected simulation mode and return snapshots."""
     if mode == "Continuous":
         return run_continuous(csv_path, num_destinations=num_destinations,
-                              duration_hours=duration_hours, arrival_rate=arrival_rate, verbose=True, algo_mode=algo_mode)
+                              duration_hours=duration_hours, arrival_rate=arrival_rate, verbose=True, algo_mode=algo_mode, simulate_failures=simulate_failures)
     else:
         random.seed(seed)
         silo = Silo()
@@ -314,9 +314,10 @@ with st.sidebar:
 
     seed = st.number_input("Random Seed", value=42, step=1)
     playback_speed = st.slider("Playback Speed", 1, 50, 10, help="Snapshots per second during playback")
+    simulate_failures = st.checkbox("⚙️ Simular Fallos Mecánicos (5%)", value=False, help="Inyecta atascos aleatorios (12s de penalización por retry) en los shuttles.")
 
     st.markdown("---")
-    run_btn = st.button("Run Simulation", type="primary", width='stretch')
+    run_btn = st.button("Run Simulation", type="primary")
     st.markdown("---")
     
     st.markdown("**Algorithms Info:**")
@@ -353,7 +354,7 @@ if needs_rerun:
     with st.spinner(f"Running {sim_mode}..."):
         mode_str = "Continuous" if "Continuous" in sim_mode else "Concurrent"
         algo_str = "Naive" if "Naive" in algo_mode else "Optimized"
-        result = run_simulation(mode_str, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_str, METRICS_VERSION)
+        result = run_simulation(mode_str, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_str, simulate_failures, METRICS_VERSION)
         st.session_state.sim_result = result
         st.session_state.metrics_version = METRICS_VERSION
         st.session_state.playback_idx = 0
@@ -373,9 +374,9 @@ st.markdown("---")
 # Playback controls
 col_ctrl1, col_ctrl2, col_ctrl3 = st.columns([1, 3, 1])
 with col_ctrl1:
-    play_btn = st.button("▶ Play", width='stretch')
+    play_btn = st.button("▶ Play")
 with col_ctrl3:
-    reset_btn = st.button("↺ Reset", width='stretch')
+    reset_btn = st.button("↺ Reset")
 
 with col_ctrl2:
     frame_idx = st.slider("Timeline", 0, len(df) - 1,
@@ -423,27 +424,25 @@ st.markdown("---")
 
 col1, col2 = st.columns(2)
 with col1:
-    st.plotly_chart(build_throughput_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_throughput_chart(df_up_to), use_container_width=True)
 with col2:
-    st.plotly_chart(build_occupancy_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_occupancy_chart(df_up_to), use_container_width=True)
 
 col3, col4 = st.columns(2)
 with col3:
-    st.plotly_chart(build_pallets_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_pallets_chart(df_up_to), use_container_width=True)
 with col4:
-    st.plotly_chart(build_aisle_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_aisle_chart(df_up_to), use_container_width=True)
 
 col5, col6 = st.columns(2)
 with col5:
-    st.plotly_chart(build_shuttle_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_shuttle_chart(df_up_to), use_container_width=True)
 with col6:
-    st.plotly_chart(build_pending_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_pending_chart(df_up_to), use_container_width=True)
 
 # ─── LIVE PLAYBACK LOOP ────────────────────────────────────────────────────
 if play_btn:
     start_idx = st.session_state.get('playback_idx', 0)
-    kpi_placeholder = st.empty()
-    chart_placeholder = st.empty()
     progress_bar = st.progress(start_idx / len(df))
 
     for i in range(start_idx, len(df)):
@@ -475,7 +474,10 @@ with st.expander("Final Simulation Summary", expanded=False):
     with summary_cols[2]:
         st.markdown("**System**")
         st.write(f"- Relocations: {result.get('total_relocations', 'N/A')}")
+        if result.get('mechanical_failures', 0) > 0:
+            st.write(f"- Mech. Failures: {result.get('mechanical_failures', 0)}")
         st.write(f"- Remaining in silo: {result.get('remaining_in_silo', 'N/A')}")
+        st.write(f"- Shuttle max time: {result.get('shuttle_max_time', 'N/A')}")
 
 # ─── GEMINI AI ASSISTANT ───────────────────────────────────────────────────
 st.markdown("---")
