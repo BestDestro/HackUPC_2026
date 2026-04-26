@@ -17,13 +17,20 @@ from silo import Silo
 from shuttle import ShuttleManager
 from concurrent_sim import ConcurrentManager, BOX_INTERVAL, run_continuous
 from csv_loader import load_silo_from_csv
+from warehouse_chatbot import (
+    DEFAULT_MODEL,
+    ask_gemini,
+    build_warehouse_context,
+    fallback_answer,
+    get_api_key,
+)
 
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # PAGE CONFIG
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 st.set_page_config(
     page_title="Hack the Flow - Silo Dashboard",
-    page_icon="ðŸ“¦",
+    page_icon="📦",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -420,6 +427,129 @@ def extract_selected_shuttle(plotly_state):
     return None
 
 
+def clean_value(value):
+    if value is None:
+        return ""
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() == "nan" else text
+
+
+def describe_trace_action(event_type, box_id="", destination="", from_position="", to_position="", state=""):
+    if event_type == "STORE":
+        return f"almacenando la caja `{box_id}` hacia `{to_position}`" if box_id and to_position else "almacenando una caja"
+    if event_type == "RETRIEVE":
+        if box_id and destination:
+            return f"extrayendo la caja `{box_id}` para el destino `{destination}`"
+        if box_id:
+            return f"extrayendo la caja `{box_id}`"
+        return "extrayendo una caja"
+    if event_type == "RELOCATE":
+        if box_id and from_position and to_position:
+            return f"reubicando la caja bloqueante `{box_id}` de `{from_position}` a `{to_position}`"
+        return "reubicando una caja bloqueante"
+    if event_type == "RETRIEVE_BLOCKER":
+        return "resolviendo un bloqueo antes de extraer una caja"
+    if state == "MOVING":
+        return "moviendose sin detalle de evento"
+    return "esperando la siguiente tarea"
+
+
+def summarize_event(event):
+    if event is None:
+        return ""
+    event_type = clean_value(event.get("event_type"))
+    box_id = clean_value(event.get("box_id"))
+    destination = clean_value(event.get("destination"))
+    from_position = clean_value(event.get("from_position"))
+    to_position = clean_value(event.get("to_position"))
+    state = clean_value(event.get("state"))
+    return describe_trace_action(event_type, box_id, destination, from_position, to_position, state)
+
+
+def build_shuttle_focus_context(trace_df, shuttle_frame, shuttle_id, current_time):
+    if not shuttle_id or trace_df.empty:
+        return "", {}
+
+    shuttle_rows = shuttle_frame[shuttle_frame["shuttle_id"] == shuttle_id]
+    if shuttle_rows.empty:
+        return "", {}
+
+    shuttle_row = shuttle_rows.iloc[0]
+    shuttle_events = trace_df[trace_df["shuttle_id"] == shuttle_id].copy()
+    if shuttle_events.empty:
+        return "", {}
+
+    shuttle_events = shuttle_events.sort_values(["start_time", "event_id"])
+    active_events = shuttle_events[
+        (shuttle_events["start_time"] <= current_time)
+        & (shuttle_events["end_time"] >= current_time)
+        & (shuttle_events["event_type"] != "INITIAL")
+    ]
+    past_events = shuttle_events[shuttle_events["end_time"] <= current_time]
+    future_events = shuttle_events[shuttle_events["start_time"] > current_time]
+
+    active_event = active_events.iloc[-1].to_dict() if not active_events.empty else None
+    last_event = past_events.iloc[-1].to_dict() if not past_events.empty else None
+    next_event = future_events.iloc[0].to_dict() if not future_events.empty else None
+
+    reference_event = active_event or last_event or next_event or {}
+    current_task = summarize_event(active_event) if active_event else (
+        f"en espera; siguiente tarea: {summarize_event(next_event)}" if next_event else "sin tarea activa ahora mismo"
+    )
+    last_task = summarize_event(last_event) if last_event else ""
+    next_task = summarize_event(next_event) if next_event else ""
+
+    summary_lines = [
+        f"- Shuttle seleccionado: {shuttle_id}",
+        f"- Estado actual: {clean_value(shuttle_row.get('state')) or 'IDLE'}",
+        f"- Posicion X actual: {float(shuttle_row.get('x', 0)):.1f}",
+        f"- Tarea actual: {current_task}",
+    ]
+
+    box_id = clean_value(reference_event.get("box_id") or shuttle_row.get("box_id"))
+    destination = clean_value(reference_event.get("destination") or shuttle_row.get("destination"))
+    from_position = clean_value(reference_event.get("from_position"))
+    to_position = clean_value(reference_event.get("to_position"))
+    reason = clean_value(reference_event.get("reason") or shuttle_row.get("reason"))
+    decision = clean_value(reference_event.get("decision") or shuttle_row.get("decision"))
+
+    if box_id:
+        summary_lines.append(f"- Caja asociada: {box_id}")
+    if destination:
+        summary_lines.append(f"- Destino de esa caja: {destination}")
+    if from_position:
+        summary_lines.append(f"- Origen de movimiento: {from_position}")
+    if to_position:
+        summary_lines.append(f"- Destino fisico del movimiento: {to_position}")
+    if last_task:
+        summary_lines.append(f"- Ultima tarea completada: {last_task}")
+    if next_task:
+        summary_lines.append(f"- Siguiente tarea conocida: {next_task}")
+    if reason:
+        summary_lines.append(f"- Motivo operativo: {reason}")
+    if decision:
+        summary_lines.append(f"- Criterio de decision: {decision}")
+
+    focus_data = {
+        "shuttle_id": shuttle_id,
+        "state": clean_value(shuttle_row.get("state")) or "IDLE",
+        "x": float(shuttle_row.get("x", 0)),
+        "current_task": current_task,
+        "box_id": box_id,
+        "destination": destination,
+        "from_position": from_position,
+        "to_position": to_position,
+        "last_task": last_task,
+        "next_task": next_task,
+        "reason": reason,
+        "decision": decision,
+        "summary_markdown": "\n".join(summary_lines),
+    }
+    return "\n".join(summary_lines), focus_data
+
+
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # SIDEBAR
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -452,21 +582,28 @@ with st.sidebar:
 
     seed = st.number_input("Random Seed", value=42, step=1)
     playback_speed = st.slider("Playback Speed", 1, 50, 10, help="Snapshots per second during playback")
-    simulate_failures = st.checkbox("âš™ï¸ Simular Fallos MecÃ¡nicos (5%)", value=False, help="Inyecta atascos aleatorios (12s de penalizaciÃ³n por retry) en los shuttles.")
-
+    simulate_failures = st.checkbox(
+        "Simular fallos mecanicos (5%)",
+        value=False,
+        help="Inyecta atascos aleatorios (12 s de penalizacion por reintento) en los shuttles.",
+    )
     st.markdown("---")
     run_btn = st.button("Run Simulation", type="primary")
     st.markdown("---")
     
     st.markdown("**Algorithms Info:**")
     if "Optimized" in algo_mode:
-        st.markdown("- **Lookahead:** Dynamic (â‰¥8 boxes)\n- **Output:** 32 Shuttles Parallel\n- **Gate:** Competitive\n- **State:** Hash Maps O(1)")
+        st.markdown("- **Lookahead:** Dynamic (>=8 boxes)\n- **Output:** 32 Shuttles Parallel\n- **Gate:** Competitive\n- **State:** Hash Maps O(1)")
     else:
         st.markdown("- **Lookahead:** Strict (12 boxes)\n- **Output:** Sequential (1 Shuttle max/tick)\n- **Gate:** Occupancy > 50%\n- **State:** Hash Maps O(1)")
 
     st.markdown("---")
-    st.markdown("**ðŸ¤– IntegraciÃ³n IA (Activa)**")
-    st.success("Conectado a Google Gemini")
+    st.markdown("**Integracion IA**")
+    if get_api_key():
+        st.success("API key cargada desde .env")
+        st.caption(f"Modelo activo: `{DEFAULT_MODEL}`")
+    else:
+        st.warning("Falta `MLH_GEMMA_API_KEY` en el archivo `.env`")
 
 
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -496,6 +633,7 @@ if needs_rerun:
         st.session_state.sim_result = result
         st.session_state.metrics_version = METRICS_VERSION
         st.session_state.playback_idx = 0
+        st.session_state.chat_messages = []
 else:
     result = st.session_state.sim_result
 
@@ -558,6 +696,8 @@ k8.metric("Median Stay", median_box_stay)
 
 trace_events = result.get("trace_events", [])
 trace_df = pd.DataFrame(trace_events) if trace_events else pd.DataFrame()
+selected_focus_context = ""
+selected_focus_data = {}
 
 st.markdown("---")
 st.markdown("### Live Shuttle Movement")
@@ -594,20 +734,31 @@ else:
         if selected_shuttle:
             shuttle_row = shuttle_frame[shuttle_frame["shuttle_id"] == selected_shuttle]
             if not shuttle_row.empty:
-                shuttle_info = shuttle_row.iloc[0]
-                st.write(f"- Shuttle: `{shuttle_info['shuttle_id']}`")
-                st.write(f"- State: `{shuttle_info['state']}`")
-                st.write(f"- X position: `{shuttle_info['x']:.1f}`")
-                if shuttle_info["event_type"]:
-                    st.write(f"- Event: `{shuttle_info['event_type']}`")
-                if shuttle_info["box_id"]:
-                    st.write(f"- Box: `{shuttle_info['box_id']}`")
-                if shuttle_info["destination"]:
-                    st.write(f"- Destination: `{shuttle_info['destination']}`")
-                if shuttle_info["reason"]:
-                    st.write(f"- Reason: {shuttle_info['reason']}")
-                if shuttle_info["decision"]:
-                    st.write(f"- Decision: {shuttle_info['decision']}")
+                selected_focus_context, selected_focus_data = build_shuttle_focus_context(
+                    trace_df,
+                    shuttle_frame,
+                    selected_shuttle,
+                    current_time,
+                )
+                st.markdown("**Shuttle seleccionado**")
+                st.write(f"- Shuttle: `{selected_focus_data.get('shuttle_id', selected_shuttle)}`")
+                st.write(f"- Estado: `{selected_focus_data.get('state', 'IDLE')}`")
+                st.write(f"- Posicion X: `{selected_focus_data.get('x', 0.0):.1f}`")
+                st.write(f"- Tarea actual: {selected_focus_data.get('current_task', 'sin detalle')}")
+                if selected_focus_data.get("box_id"):
+                    st.write(f"- Caja activa: `{selected_focus_data['box_id']}`")
+                if selected_focus_data.get("destination"):
+                    st.write(f"- Destino logico: `{selected_focus_data['destination']}`")
+                if selected_focus_data.get("from_position"):
+                    st.write(f"- Sale desde: `{selected_focus_data['from_position']}`")
+                if selected_focus_data.get("to_position"):
+                    st.write(f"- Va hacia: `{selected_focus_data['to_position']}`")
+                if selected_focus_data.get("next_task"):
+                    st.write(f"- Siguiente tarea: {selected_focus_data['next_task']}")
+                if selected_focus_data.get("reason"):
+                    st.write(f"- Motivo: {selected_focus_data['reason']}")
+                if selected_focus_data.get("decision"):
+                    st.write(f"- Decision: {selected_focus_data['decision']}")
         else:
             st.write("No shuttle selected.")
 
@@ -673,8 +824,12 @@ with st.expander("Final Simulation Summary", expanded=False):
 
 # â”€â”€â”€ GEMINI AI ASSISTANT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 st.markdown("---")
-st.markdown("### ðŸ¤– Habla con el Silo (Gemini AI)")
-st.markdown("PregÃºntale a la IA sobre su estado actual, quÃ© estÃ¡ haciendo o si detecta algÃºn cuello de botella.")
+st.markdown("### Habla con el silo (Gemini AI)")
+st.markdown("Preguntale por el estado general del silo o por el shuttle que tengas seleccionado.")
+if selected_focus_data.get("shuttle_id"):
+    st.info(
+        f"El chat usara como foco principal el shuttle `{selected_focus_data['shuttle_id']}` y su tarea actual."
+    )
 
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
@@ -684,7 +839,7 @@ for message in st.session_state.chat_messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt := st.chat_input("PregÃºntale al Silo (ej: 'Â¿CÃ³mo vas de ocupaciÃ³n?', 'Â¿Hay mucho trabajo pendiente?'):"):
+if prompt := st.chat_input("Preguntale al silo (ej: 'Como vas de ocupacion?', 'Hay mucho trabajo pendiente?'):"):
     st.session_state.chat_messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -692,32 +847,22 @@ if prompt := st.chat_input("PregÃºntale al Silo (ej: 'Â¿CÃ³mo vas de ocupa
     with st.chat_message("assistant"):
         with st.spinner("Analizando estado del silo..."):
             try:
-                from google import genai
-                client = genai.Client(api_key="AIzaSyAjIyY46MQq7yJYtodNIFS2JmZtI8QtW8o")
-                
-                # Context generation
-                context = f"""
-                Eres la IA integrada en un Silo LogÃ­stico Automatizado avanzado gestionando 32 shuttles robÃ³ticos.
-                Debes responder a las preguntas del operador de forma profesional, tÃ©cnica y muy breve (mÃ¡ximo 2-3 frases), hablando en primera persona ("Tengo...", "He almacenado...").
-                
-                MÃ©tricas en tiempo real (Tiempo Simulado: {current['time_min']:.1f} min):
-                - Cajas guardadas en total: {int(current['boxes_stored'])}
-                - Cajas extraÃ­das en total: {int(current['boxes_retrieved'])}
-                - OcupaciÃ³n fÃ­sica: {current['occupancy_pct']:.1f}% de 7680 slots
-                - Cajas pendientes de procesar en entrada: {int(current['pending_input'])}
-                - Tareas de reubicaciÃ³n realizadas (desatascos): {int(current['relocations'])}
-                - Pallets de salida completados: {int(current['pallets_completed'])}
-                - Estrategia algorÃ­tmica activa: {algo_mode}
-                
-                El operador te ha preguntado:
-                """
-                # Use Gemini to generate response with the new SDK
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=context + prompt
+                context = build_warehouse_context(
+                    result,
+                    current.to_dict(),
+                    algo_mode,
+                    sim_mode,
+                    focus_context=selected_focus_context,
                 )
-                
-                st.markdown(response.text)
-                st.session_state.chat_messages.append({"role": "assistant", "content": response.text})
+                response_text = ask_gemini(prompt, context)
+                st.markdown(response_text)
+                st.session_state.chat_messages.append({"role": "assistant", "content": response_text})
             except Exception as e:
-                st.error(f"Error de conexiÃ³n con la IA: {str(e)}")
+                fallback_text = fallback_answer(
+                    prompt,
+                    selected_focus_data.get("summary_markdown", ""),
+                    algo_mode,
+                )
+                st.markdown(fallback_text)
+                st.caption(f"API no disponible ahora mismo: {str(e)}")
+                st.session_state.chat_messages.append({"role": "assistant", "content": fallback_text})
