@@ -1,4 +1,4 @@
-﻿"""
+"""
 dashboard.py - Streamlit live dashboard for the logistics simulation.
 
 Run: streamlit run dashboard.py
@@ -17,26 +17,20 @@ from silo import Silo
 from shuttle import ShuttleManager
 from concurrent_sim import ConcurrentManager, BOX_INTERVAL, run_continuous
 from csv_loader import load_silo_from_csv
-from warehouse_chatbot import (
-    DEFAULT_MODEL,
-    ask_gemma,
-    build_warehouse_context,
-    fallback_answer,
-)
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
 # PAGE CONFIG
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Hack the Flow - Silo Dashboard",
-    page_icon="ðŸ“¦",
+    page_icon="📦",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
 # CUSTOM CSS
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
@@ -125,11 +119,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
 # SIMULATION RUNNER (cached)
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
+METRICS_VERSION = 5
+
 @st.cache_data(show_spinner="Running simulation...")
-def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_mode):
+def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_mode, metrics_version):
     """Run the selected simulation mode and return snapshots."""
     if mode == "Continuous":
         return run_continuous(csv_path, num_destinations=num_destinations,
@@ -145,8 +141,7 @@ def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hour
         stats = result["stats"]
         manager.all_boxes.update(all_boxes)
         manager.boxes_stored = stats["loaded"]
-        if hasattr(manager, "record_initial_state"):
-            manager.record_initial_state(all_boxes)
+        manager.register_initial_boxes(all_boxes)
 
         existing_dests = list(set(b.destination for b in all_boxes.values()))
 
@@ -163,9 +158,19 @@ def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hour
 
 
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
 # CHART BUILDERS
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
+def format_duration(seconds):
+    if seconds is None:
+        return "N/A"
+    if seconds >= 3600:
+        return f"{seconds / 3600:.2f}h"
+    if seconds >= 60:
+        return f"{seconds / 60:.1f}min"
+    return f"{seconds:.1f}s"
+
+
 DARK_BG = "#050505"
 GRID_COLOR = "#1a1a1a"
 COLORS = {
@@ -277,55 +282,6 @@ def build_pending_chart(df):
     return fig
 
 
-TRACE_COLORS = {
-    "INITIAL": "#95a5a6",
-    "STORE": "#00b894",
-    "RETRIEVE": "#e17055",
-    "RELOCATE": "#a29bfe",
-    "RETRIEVE_BLOCKER": "#fdcb6e",
-}
-
-
-def build_trace_context(trace_df, mode, selected_id, current_time):
-    id_col = "box_id" if mode == "Box" else "shuttle_id"
-    focus = trace_df[trace_df[id_col] == selected_id].sort_values("start_time")
-    if focus.empty:
-        return ""
-
-    active = focus[
-        (focus["start_time"] <= current_time) &
-        (focus["end_time"] >= current_time) &
-        (focus["duration"] > 0)
-    ]
-    if not active.empty:
-        event = active.iloc[-1]
-        state = "currently moving"
-    else:
-        past = focus[focus["end_time"] <= current_time]
-        if not past.empty:
-            event = past.iloc[-1]
-            state = "last completed movement"
-        else:
-            event = focus.iloc[0]
-            state = "next scheduled movement"
-
-    return (
-        f"- Focus mode: {mode}\n"
-        f"- Selected id: {selected_id}\n"
-        f"- Route state: {state}\n"
-        f"- Event type: {event['event_type']}\n"
-        f"- Box id: {event['box_id']}\n"
-        f"- Destination: {event['destination']}\n"
-        f"- Shuttle: {event['shuttle_id']}\n"
-        f"- From: {event['from_position']} to {event['to_position']}\n"
-        f"- X route box: {event['box_from_x']} -> {event['box_to_x']}\n"
-        f"- X route shuttle: {event['shuttle_from_x']} -> {event['shuttle_to_x']}\n"
-        f"- Time window: {event['start_min']:.2f} to {event['end_min']:.2f} min\n"
-        f"- Reason: {event['reason']}\n"
-        f"- Decision: {event['decision']}"
-    )
-
-
 def get_shuttle_frame(trace_df, current_time):
     rows = []
     for aisle in range(1, 5):
@@ -357,19 +313,6 @@ def get_shuttle_frame(trace_df, current_time):
                 state = "IDLE"
 
             lane = (aisle - 1) * 8 + y
-            if event is None:
-                event_type = "IDLE"
-                box_id = ""
-                destination = ""
-                decision = "Shuttle waiting at the head."
-                reason = "No movement is assigned at the current simulation time."
-            else:
-                event_type = event["event_type"]
-                box_id = event["box_id"]
-                destination = event["destination"]
-                decision = event["decision"]
-                reason = event["reason"]
-
             rows.append({
                 "shuttle_id": shuttle_id,
                 "aisle": aisle,
@@ -378,11 +321,11 @@ def get_shuttle_frame(trace_df, current_time):
                 "lane_label": f"A{aisle}-Y{y}",
                 "x": x,
                 "state": state,
-                "event_type": event_type,
-                "box_id": box_id,
-                "destination": destination,
-                "decision": decision,
-                "reason": reason,
+                "event_type": "" if event is None else event["event_type"],
+                "box_id": "" if event is None else event["box_id"],
+                "destination": "" if event is None else event["destination"],
+                "reason": "" if event is None else event["reason"],
+                "decision": "" if event is None else event["decision"],
             })
     return pd.DataFrame(rows)
 
@@ -392,14 +335,14 @@ def build_live_shuttle_map(trace_df, current_time, selected_shuttle=None):
     marker_colors = shuttle_df["state"].map({
         "MOVING": "#00cec9",
         "IDLE": "#636e72",
-    }).fillna("#667eea")
+    }).fillna("#636e72")
     marker_sizes = [
-        20 if sid == selected_shuttle else (15 if state == "MOVING" else 11)
-        for sid, state in zip(shuttle_df["shuttle_id"], shuttle_df["state"])
+        20 if shuttle_id == selected_shuttle else (15 if state == "MOVING" else 11)
+        for shuttle_id, state in zip(shuttle_df["shuttle_id"], shuttle_df["state"])
     ]
     marker_symbols = [
-        "diamond" if sid == selected_shuttle else "circle"
-        for sid in shuttle_df["shuttle_id"]
+        "diamond" if shuttle_id == selected_shuttle else "circle"
+        for shuttle_id in shuttle_df["shuttle_id"]
     ]
 
     fig = go.Figure()
@@ -421,7 +364,6 @@ def build_live_shuttle_map(trace_df, current_time, selected_shuttle=None):
             "event_type",
             "box_id",
             "destination",
-            "decision",
         ]],
         hovertemplate=(
             "<b>%{customdata[0]}</b><br>"
@@ -429,8 +371,7 @@ def build_live_shuttle_map(trace_df, current_time, selected_shuttle=None):
             "State=%{customdata[1]}<br>"
             "Event=%{customdata[2]}<br>"
             "Box=%{customdata[3]}<br>"
-            "Dest=%{customdata[4]}<br>"
-            "%{customdata[5]}<extra></extra>"
+            "Dest=%{customdata[4]}<extra></extra>"
         ),
         selected=dict(marker=dict(size=22, color="#fdcb6e")),
         unselected=dict(marker=dict(opacity=0.75)),
@@ -452,7 +393,7 @@ def build_live_shuttle_map(trace_df, current_time, selected_shuttle=None):
             font=dict(color="#aaa", size=11),
         )
 
-    chart_layout(fig, "Live Shuttle Map - click a shuttle to inspect it", height=520)
+    chart_layout(fig, "Live Shuttle Movement", height=520)
     fig.update_xaxes(title="X coordinate", range=[-2, 64], dtick=5)
     fig.update_yaxes(
         title="Shuttle lane",
@@ -479,16 +420,25 @@ def extract_selected_shuttle(plotly_state):
     return None
 
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
+CSV_SCENARIOS = {
+    "Inicial entregado (~12% lleno)": "silo-semi-empty.csv",
+    "Medio lleno (50%)": "silo-half-full.csv",
+    "Casi lleno (90%)": "silo-almost-full.csv",
+    "Practicamente lleno (98%)": "silo-98-full.csv",
+}
+
 with st.sidebar:
     st.markdown("### Simulation Parameters")
 
     sim_mode = st.radio("Operation Mode", ["Concurrent (Finite)", "Continuous (Infinite Flow)"])
     algo_mode = st.radio("Algorithm Strategy", ["Optimized (Parallel + Lookahead)", "Naive (Legacy)"])
 
-    csv_path = st.text_input("CSV File", value="silo-semi-empty.csv")
+    csv_scenario = st.selectbox("Estado inicial del silo", list(CSV_SCENARIOS.keys()))
+    csv_path = CSV_SCENARIOS[csv_scenario]
+    st.caption(f"CSV: `{csv_path}`")
     num_destinations = st.slider("Destinations", 5, 80, 20)
 
     if sim_mode == "Concurrent (Finite)":
@@ -509,33 +459,18 @@ with st.sidebar:
     
     st.markdown("**Algorithms Info:**")
     if "Optimized" in algo_mode:
-        st.markdown("- **Lookahead:** Dynamic (â‰¥8 boxes)\n- **Output:** 32 Shuttles Parallel\n- **Gate:** Competitive\n- **State:** Hash Maps O(1)")
+        st.markdown("- **Lookahead:** Dynamic (≥8 boxes)\n- **Output:** 32 Shuttles Parallel\n- **Gate:** Competitive\n- **State:** Hash Maps O(1)")
     else:
         st.markdown("- **Lookahead:** Strict (12 boxes)\n- **Output:** Sequential (1 Shuttle max/tick)\n- **Gate:** Occupancy > 50%\n- **State:** Hash Maps O(1)")
 
     st.markdown("---")
-    st.markdown("### Warehouse Chat")
-    ai_model = st.text_input("Model", value=DEFAULT_MODEL)
-    api_key_input = st.text_input(
-        "API key",
-        value="",
-        type="password",
-        help="Uses MLH_GEMMA_API_KEY or GEMINI_API_KEY if left empty.",
-    )
-    detected_api_key = bool(
-        api_key_input
-        or os.getenv("MLH_GEMMA_API_KEY")
-        or os.getenv("GEMINI_API_KEY")
-    )
-    if detected_api_key:
-        st.success("API key detected")
-    else:
-        st.warning("No API key detected")
+    st.markdown("**🤖 Integración IA (Activa)**")
+    st.success("Conectado a Google Gemini")
 
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
 # MAIN DASHBOARD
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─────────────────────────────────────────────────────────────────────────────
 st.markdown('<h1 class="main-title">Hack the Flow - Silo Dashboard</h1>', unsafe_allow_html=True)
 st.markdown('<p class="subtitle">Real-time visualization of the logistics simulation</p>',
             unsafe_allow_html=True)
@@ -546,12 +481,19 @@ if not os.path.exists(csv_path):
     st.stop()
 
 # Run or use cached simulation
-if run_btn or 'sim_result' not in st.session_state:
+needs_rerun = (
+    run_btn
+    or 'sim_result' not in st.session_state
+    or st.session_state.get('metrics_version') != METRICS_VERSION
+)
+
+if needs_rerun:
     with st.spinner(f"Running {sim_mode}..."):
         mode_str = "Continuous" if "Continuous" in sim_mode else "Concurrent"
         algo_str = "Naive" if "Naive" in algo_mode else "Optimized"
-        result = run_simulation(mode_str, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_str)
+        result = run_simulation(mode_str, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_str, METRICS_VERSION)
         st.session_state.sim_result = result
+        st.session_state.metrics_version = METRICS_VERSION
         st.session_state.playback_idx = 0
 else:
     result = st.session_state.sim_result
@@ -563,15 +505,15 @@ if not snapshots:
 
 df = pd.DataFrame(snapshots)
 
-# â”€â”€â”€ LIVE PLAYBACK â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─── LIVE PLAYBACK ──────────────────────────────────────────────────────────
 st.markdown("---")
 
 # Playback controls
 col_ctrl1, col_ctrl2, col_ctrl3 = st.columns([1, 3, 1])
 with col_ctrl1:
-    play_btn = st.button("â–¶ Play", width='stretch')
+    play_btn = st.button("Play", width='stretch')
 with col_ctrl3:
-    reset_btn = st.button("â†º Reset", width='stretch')
+    reset_btn = st.button("Reset", width='stretch')
 
 with col_ctrl2:
     frame_idx = st.slider("Timeline", 0, len(df) - 1,
@@ -597,46 +539,42 @@ elif has_pending or current['boxes_stored'] < result.get('boxes_arrived', 0):
 else:
     phase_html = '<span class="phase-badge-output">OUTPUT ONLY</span>'
 
-# â”€â”€â”€ KPI ROW â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─── KPI ROW ────────────────────────────────────────────────────────────────
 st.markdown(f"#### Sim Time: **{current['time_min']:.1f} min** &nbsp; {phase_html}",
             unsafe_allow_html=True)
 
-k1, k2, k3, k4, k5, k6 = st.columns(6)
+avg_box_stay = format_duration(current.get('avg_time_in_silo_sec', 0.0))
+median_box_stay = format_duration(current.get('median_time_in_silo_sec', 0.0))
+
+k1, k2, k3, k4, k5, k6, k7, k8 = st.columns(8)
 k1.metric("Boxes Stored", f"{int(current['boxes_stored']):,}")
 k2.metric("Boxes Retrieved", f"{int(current['boxes_retrieved']):,}")
 k3.metric("Pallets Done", int(current['pallets_completed']))
 k4.metric("Occupancy", f"{current['occupancy_pct']:.1f}%")
 k5.metric("Pending Input", int(current['pending_input']))
 k6.metric("Relocations", int(current['relocations']))
+k7.metric("Avg Stay", avg_box_stay)
+k8.metric("Median Stay", median_box_stay)
 
 trace_events = result.get("trace_events", [])
 trace_df = pd.DataFrame(trace_events) if trace_events else pd.DataFrame()
-selected_trace_context = ""
 
 st.markdown("---")
 st.markdown("### Live Shuttle Movement")
 
 if trace_df.empty:
-    st.info("This run does not expose live shuttle traces yet.")
+    st.info("This run does not expose shuttle traces yet.")
 else:
     current_time = float(current["time"])
-
     if "selected_shuttle_id" not in st.session_state:
-        st.session_state.selected_shuttle_id = "None"
-    if "selected_box_id" not in st.session_state:
-        st.session_state.selected_box_id = "None"
+        st.session_state.selected_shuttle_id = None
 
-    live_col, focus_col = st.columns([3, 2])
-
+    live_col, detail_col = st.columns([3, 2])
     with live_col:
-        focused_shuttle = st.session_state.get("selected_shuttle_id")
-        if focused_shuttle == "None":
-            focused_shuttle = None
-
         shuttle_map, shuttle_frame = build_live_shuttle_map(
             trace_df,
             current_time,
-            selected_shuttle=focused_shuttle,
+            selected_shuttle=st.session_state.get("selected_shuttle_id"),
         )
         plotly_state = st.plotly_chart(
             shuttle_map,
@@ -650,75 +588,30 @@ else:
             st.session_state.selected_shuttle_id = clicked_shuttle
             st.rerun()
 
-    with focus_col:
-        shuttle_options = ["None"] + sorted(shuttle_frame["shuttle_id"].tolist())
-        current_shuttle_value = st.session_state.get("selected_shuttle_id", "None")
-        if current_shuttle_value not in shuttle_options:
-            current_shuttle_value = "None"
-        selected_shuttle_value = st.selectbox(
-            "Focus shuttle for chat",
-            shuttle_options,
-            index=shuttle_options.index(current_shuttle_value),
-            key="selected_shuttle_id",
-            help="Search or choose a shuttle. Clicking the map also updates this focus.",
-        )
-
-        box_candidates = sorted(
-            box_id
-            for box_id in trace_df.loc[trace_df["event_type"] != "INITIAL", "box_id"].dropna().unique().tolist()
-            if box_id
-        )
-        box_options = ["None"] + box_candidates
-        current_box_value = st.session_state.get("selected_box_id", "None")
-        if current_box_value not in box_options:
-            current_box_value = "None"
-        selected_box_value = st.selectbox(
-            "Focus box for chat",
-            box_options,
-            index=box_options.index(current_box_value),
-            key="selected_box_id",
-            help="Search or choose a box to ask why it moved or where it is going.",
-        )
-
-        if selected_shuttle_value != "None":
-            shuttle_row = shuttle_frame[shuttle_frame["shuttle_id"] == selected_shuttle_value]
+    with detail_col:
+        selected_shuttle = st.session_state.get("selected_shuttle_id")
+        st.caption("Click a shuttle to inspect its current movement.")
+        if selected_shuttle:
+            shuttle_row = shuttle_frame[shuttle_frame["shuttle_id"] == selected_shuttle]
             if not shuttle_row.empty:
                 shuttle_info = shuttle_row.iloc[0]
-                st.caption("Current shuttle focus")
                 st.write(f"- Shuttle: `{shuttle_info['shuttle_id']}`")
                 st.write(f"- State: `{shuttle_info['state']}`")
                 st.write(f"- X position: `{shuttle_info['x']:.1f}`")
+                if shuttle_info["event_type"]:
+                    st.write(f"- Event: `{shuttle_info['event_type']}`")
                 if shuttle_info["box_id"]:
                     st.write(f"- Box: `{shuttle_info['box_id']}`")
                 if shuttle_info["destination"]:
                     st.write(f"- Destination: `{shuttle_info['destination']}`")
+                if shuttle_info["reason"]:
+                    st.write(f"- Reason: {shuttle_info['reason']}")
+                if shuttle_info["decision"]:
+                    st.write(f"- Decision: {shuttle_info['decision']}")
+        else:
+            st.write("No shuttle selected.")
 
-    focus_parts = []
-    if selected_shuttle_value != "None":
-        shuttle_context = build_trace_context(
-            trace_df,
-            "Shuttle",
-            selected_shuttle_value,
-            current_time,
-        )
-        if shuttle_context:
-            focus_parts.append(shuttle_context)
-    if selected_box_value != "None":
-        box_context = build_trace_context(
-            trace_df,
-            "Box",
-            selected_box_value,
-            current_time,
-        )
-        if box_context:
-            focus_parts.append(box_context)
-
-    selected_trace_context = "\n\n".join(focus_parts)
-    if selected_trace_context:
-        with st.expander("Selected live movement context", expanded=False):
-            st.code(selected_trace_context)
-
-# â”€â”€â”€ CHARTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─── CHARTS ─────────────────────────────────────────────────────────────────
 st.markdown("---")
 
 col1, col2 = st.columns(2)
@@ -739,7 +632,7 @@ with col5:
 with col6:
     st.plotly_chart(build_pending_chart(df_up_to), width='stretch')
 
-# â”€â”€â”€ LIVE PLAYBACK LOOP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─── LIVE PLAYBACK LOOP ────────────────────────────────────────────────────
 if play_btn:
     start_idx = st.session_state.get('playback_idx', 0)
     kpi_placeholder = st.empty()
@@ -754,7 +647,7 @@ if play_btn:
     st.session_state.playback_idx = len(df) - 1
     st.rerun()
 
-# â”€â”€â”€ FINAL SUMMARY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─── FINAL SUMMARY ─────────────────────────────────────────────────────────
 st.markdown("---")
 with st.expander("Final Simulation Summary", expanded=False):
     summary_cols = st.columns(3)
@@ -763,56 +656,67 @@ with st.expander("Final Simulation Summary", expanded=False):
         st.write(f"- Boxes arrived: {result.get('boxes_arrived', 'N/A')}")
         st.write(f"- Boxes stored: {result.get('boxes_stored', 'N/A')}")
         st.write(f"- Boxes retrieved: {result.get('boxes_retrieved', 'N/A')}")
+        st.write(f"- Boxes/hour: {result.get('boxes_per_hour', 'N/A')}")
     with summary_cols[1]:
         st.markdown("**Pallets**")
         st.write(f"- Completed: {result.get('pallets_completed', 'N/A')}")
-        st.write(f"- Full pallet %: {result.get('full_pallet_pct', 'N/A')}")
+        st.write(f"- Pallets/hour: {result.get('pallets_per_hour', 'N/A')}")
+        st.write(f"- Full pallet: {result.get('full_pallet_pct', 'N/A')}")
         st.write(f"- Avg time/pallet: {result.get('avg_time_per_pallet', 'N/A')}")
+        st.write(f"- Avg box stay: {result.get('avg_time_in_silo', 'N/A')}")
+        st.write(f"- Median box stay: {result.get('median_time_in_silo', 'N/A')}")
     with summary_cols[2]:
         st.markdown("**System**")
         st.write(f"- Relocations: {result.get('total_relocations', 'N/A')}")
         st.write(f"- Remaining in silo: {result.get('remaining_in_silo', 'N/A')}")
-        st.write(f"- Shuttle max time: {result.get('shuttle_max_time', 'N/A')}")
 
-# Warehouse chat
+# ─── GEMINI AI ASSISTANT ───────────────────────────────────────────────────
 st.markdown("---")
-st.markdown("### Warehouse Chat")
-st.markdown("Ask about the warehouse state, a shuttle, or a box you have selected above.")
+st.markdown("### 🤖 Habla con el Silo (Gemini AI)")
+st.markdown("Pregúntale a la IA sobre su estado actual, qué está haciendo o si detecta algún cuello de botella.")
 
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
 
+# Display chat history
 for message in st.session_state.chat_messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt := st.chat_input("Ask about the warehouse, a shuttle, or a box."):
+if prompt := st.chat_input("Pregúntale al Silo (ej: '¿Cómo vas de ocupación?', '¿Hay mucho trabajo pendiente?'):"):
     st.session_state.chat_messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking through the warehouse state..."):
-            algorithm_name = "Naive" if "Naive" in algo_mode else "Optimized"
-            api_key = (
-                api_key_input
-                or os.getenv("MLH_GEMMA_API_KEY")
-                or os.getenv("GEMINI_API_KEY")
-            )
-            context = build_warehouse_context(
-                result,
-                current.to_dict(),
-                algorithm_name,
-                focus_context=selected_trace_context,
-            )
+        with st.spinner("Analizando estado del silo..."):
             try:
-                answer = ask_gemma(prompt, context, api_key, model=ai_model)
-            except Exception as exc:
-                fallback = fallback_answer(prompt, context, algorithm_name)
-                answer = (
-                    f"_API unavailable, using local explanation. Detail: {exc}_\n\n"
-                    f"{fallback}"
+                from google import genai
+                client = genai.Client(api_key="AIzaSyAjIyY46MQq7yJYtodNIFS2JmZtI8QtW8o")
+                
+                # Context generation
+                context = f"""
+                Eres la IA integrada en un Silo Logístico Automatizado avanzado gestionando 32 shuttles robóticos.
+                Debes responder a las preguntas del operador de forma profesional, técnica y muy breve (máximo 2-3 frases), hablando en primera persona ("Tengo...", "He almacenado...").
+                
+                Métricas en tiempo real (Tiempo Simulado: {current['time_min']:.1f} min):
+                - Cajas guardadas en total: {int(current['boxes_stored'])}
+                - Cajas extraídas en total: {int(current['boxes_retrieved'])}
+                - Ocupación física: {current['occupancy_pct']:.1f}% de 7680 slots
+                - Cajas pendientes de procesar en entrada: {int(current['pending_input'])}
+                - Tareas de reubicación realizadas (desatascos): {int(current['relocations'])}
+                - Pallets de salida completados: {int(current['pallets_completed'])}
+                - Estrategia algorítmica activa: {algo_mode}
+                
+                El operador te ha preguntado:
+                """
+                # Use Gemini to generate response with the new SDK
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=context + prompt
                 )
-
-            st.markdown(answer)
-            st.session_state.chat_messages.append({"role": "assistant", "content": answer})
+                
+                st.markdown(response.text)
+                st.session_state.chat_messages.append({"role": "assistant", "content": response.text})
+            except Exception as e:
+                st.error(f"Error de conexión con la IA: {str(e)}")
