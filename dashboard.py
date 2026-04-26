@@ -130,6 +130,7 @@ st.markdown("""
 # SIMULATION RUNNER (cached)
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 METRICS_VERSION = 5
+CHATBOT_VERSION = 2
 
 @st.cache_data(show_spinner="Running simulation...")
 def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_mode, simulate_failures, metrics_version):
@@ -438,22 +439,22 @@ def clean_value(value):
 
 def describe_trace_action(event_type, box_id="", destination="", from_position="", to_position="", state=""):
     if event_type == "STORE":
-        return f"almacenando la caja `{box_id}` hacia `{to_position}`" if box_id and to_position else "almacenando una caja"
+        return f"storing box `{box_id}` into `{to_position}`" if box_id and to_position else "storing a box"
     if event_type == "RETRIEVE":
         if box_id and destination:
-            return f"extrayendo la caja `{box_id}` para el destino `{destination}`"
+            return f"retrieving box `{box_id}` for destination `{destination}`"
         if box_id:
-            return f"extrayendo la caja `{box_id}`"
-        return "extrayendo una caja"
+            return f"retrieving box `{box_id}`"
+        return "retrieving a box"
     if event_type == "RELOCATE":
         if box_id and from_position and to_position:
-            return f"reubicando la caja bloqueante `{box_id}` de `{from_position}` a `{to_position}`"
-        return "reubicando una caja bloqueante"
+            return f"relocating blocking box `{box_id}` from `{from_position}` to `{to_position}`"
+        return "relocating a blocking box"
     if event_type == "RETRIEVE_BLOCKER":
-        return "resolviendo un bloqueo antes de extraer una caja"
+        return "clearing a blocker before retrieving a box"
     if state == "MOVING":
-        return "moviendose sin detalle de evento"
-    return "esperando la siguiente tarea"
+        return "moving without a detailed event"
+    return "waiting for the next task"
 
 
 def summarize_event(event):
@@ -496,16 +497,16 @@ def build_shuttle_focus_context(trace_df, shuttle_frame, shuttle_id, current_tim
 
     reference_event = active_event or last_event or next_event or {}
     current_task = summarize_event(active_event) if active_event else (
-        f"en espera; siguiente tarea: {summarize_event(next_event)}" if next_event else "sin tarea activa ahora mismo"
+        f"idle; next known task: {summarize_event(next_event)}" if next_event else "no active task right now"
     )
     last_task = summarize_event(last_event) if last_event else ""
     next_task = summarize_event(next_event) if next_event else ""
 
     summary_lines = [
-        f"- Shuttle seleccionado: {shuttle_id}",
-        f"- Estado actual: {clean_value(shuttle_row.get('state')) or 'IDLE'}",
-        f"- Posicion X actual: {float(shuttle_row.get('x', 0)):.1f}",
-        f"- Tarea actual: {current_task}",
+        f"- Selected shuttle: {shuttle_id}",
+        f"- Current state: {clean_value(shuttle_row.get('state')) or 'IDLE'}",
+        f"- Current X position: {float(shuttle_row.get('x', 0)):.1f}",
+        f"- Current task: {current_task}",
     ]
 
     box_id = clean_value(reference_event.get("box_id") or shuttle_row.get("box_id"))
@@ -516,21 +517,21 @@ def build_shuttle_focus_context(trace_df, shuttle_frame, shuttle_id, current_tim
     decision = clean_value(reference_event.get("decision") or shuttle_row.get("decision"))
 
     if box_id:
-        summary_lines.append(f"- Caja asociada: {box_id}")
+        summary_lines.append(f"- Associated box: {box_id}")
     if destination:
-        summary_lines.append(f"- Destino de esa caja: {destination}")
+        summary_lines.append(f"- Destination for that box: {destination}")
     if from_position:
-        summary_lines.append(f"- Origen de movimiento: {from_position}")
+        summary_lines.append(f"- Movement origin: {from_position}")
     if to_position:
-        summary_lines.append(f"- Destino fisico del movimiento: {to_position}")
+        summary_lines.append(f"- Physical movement target: {to_position}")
     if last_task:
-        summary_lines.append(f"- Ultima tarea completada: {last_task}")
+        summary_lines.append(f"- Last completed task: {last_task}")
     if next_task:
-        summary_lines.append(f"- Siguiente tarea conocida: {next_task}")
+        summary_lines.append(f"- Next known task: {next_task}")
     if reason:
-        summary_lines.append(f"- Motivo operativo: {reason}")
+        summary_lines.append(f"- Operational reason: {reason}")
     if decision:
-        summary_lines.append(f"- Criterio de decision: {decision}")
+        summary_lines.append(f"- Decision rule: {decision}")
 
     focus_data = {
         "shuttle_id": shuttle_id,
@@ -554,10 +555,10 @@ def build_shuttle_focus_context(trace_df, shuttle_frame, shuttle_id, current_tim
 # SIDEBAR
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 CSV_SCENARIOS = {
-    "Inicial entregado (~12% lleno)": "silo-semi-empty.csv",
-    "Medio lleno (50%)": "silo-half-full.csv",
-    "Casi lleno (90%)": "silo-almost-full.csv",
-    "Practicamente lleno (98%)": "silo-98-full.csv",
+    "Delivered starting state (~12% full)": "silo-semi-empty.csv",
+    "Half full (50%)": "silo-half-full.csv",
+    "Almost full (90%)": "silo-almost-full.csv",
+    "Nearly full (98%)": "silo-98-full.csv",
 }
 
 with st.sidebar:
@@ -566,7 +567,7 @@ with st.sidebar:
     sim_mode = st.radio("Operation Mode", ["Concurrent (Finite)", "Continuous (Infinite Flow)"])
     algo_mode = st.radio("Algorithm Strategy", ["Optimized (Parallel + Lookahead)", "Naive (Legacy)"])
 
-    csv_scenario = st.selectbox("Estado inicial del silo", list(CSV_SCENARIOS.keys()))
+    csv_scenario = st.selectbox("Initial silo state", list(CSV_SCENARIOS.keys()))
     csv_path = CSV_SCENARIOS[csv_scenario]
     st.caption(f"CSV: `{csv_path}`")
     num_destinations = st.slider("Destinations", 5, 80, 20)
@@ -583,9 +584,9 @@ with st.sidebar:
     seed = st.number_input("Random Seed", value=42, step=1)
     playback_speed = st.slider("Playback Speed", 1, 50, 10, help="Snapshots per second during playback")
     simulate_failures = st.checkbox(
-        "Simular fallos mecanicos (5%)",
+        "Simulate mechanical failures (5%)",
         value=False,
-        help="Inyecta atascos aleatorios (12 s de penalizacion por reintento) en los shuttles.",
+        help="Injects random jams (12 s retry penalty) into the shuttles.",
     )
     st.markdown("---")
     run_btn = st.button("Run Simulation", type="primary")
@@ -598,12 +599,12 @@ with st.sidebar:
         st.markdown("- **Lookahead:** Strict (12 boxes)\n- **Output:** Sequential (1 Shuttle max/tick)\n- **Gate:** Occupancy > 50%\n- **State:** Hash Maps O(1)")
 
     st.markdown("---")
-    st.markdown("**Integracion IA**")
+    st.markdown("**AI Integration**")
     if get_api_key():
-        st.success("API key cargada desde .env")
-        st.caption(f"Modelo activo: `{DEFAULT_MODEL}`")
+        st.success("API key loaded from `.env`")
+        st.caption(f"Active model: `{DEFAULT_MODEL}`")
     else:
-        st.warning("Falta `MLH_GEMMA_API_KEY` en el archivo `.env`")
+        st.warning("Missing `MLH_GEMMA_API_KEY` in the `.env` file")
 
 
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -637,6 +638,10 @@ if needs_rerun:
 else:
     result = st.session_state.sim_result
 
+if st.session_state.get("chatbot_version") != CHATBOT_VERSION:
+    st.session_state.chat_messages = []
+    st.session_state.chatbot_version = CHATBOT_VERSION
+
 snapshots = result.get('snapshots', [])
 if not snapshots:
     st.warning("No snapshots collected. Run the simulation first.")
@@ -647,20 +652,15 @@ df = pd.DataFrame(snapshots)
 # â”€â”€â”€ LIVE PLAYBACK â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 st.markdown("---")
 
-# Playback controls
-col_ctrl1, col_ctrl2, col_ctrl3 = st.columns([1, 3, 1])
-with col_ctrl1:
-    play_btn = st.button("Play", width='stretch')
-with col_ctrl3:
-    reset_btn = st.button("Reset", width='stretch')
-with col_ctrl2:
-    frame_idx = st.slider("Timeline", 0, len(df) - 1,
-                           st.session_state.get('playback_idx', len(df) - 1),
-                           key="timeline_slider")
-
-if reset_btn:
-    st.session_state.playback_idx = 0
-    st.rerun()
+# Timeline control
+frame_idx = st.slider(
+    "Timeline",
+    0,
+    len(df) - 1,
+    st.session_state.get('playback_idx', len(df) - 1),
+    key="timeline_slider",
+)
+st.session_state.playback_idx = frame_idx
 
 # Get current frame data
 current = df.iloc[frame_idx]
@@ -740,25 +740,25 @@ else:
                     selected_shuttle,
                     current_time,
                 )
-                st.markdown("**Shuttle seleccionado**")
+                st.markdown("**Selected Shuttle**")
                 st.write(f"- Shuttle: `{selected_focus_data.get('shuttle_id', selected_shuttle)}`")
-                st.write(f"- Estado: `{selected_focus_data.get('state', 'IDLE')}`")
-                st.write(f"- Posicion X: `{selected_focus_data.get('x', 0.0):.1f}`")
-                st.write(f"- Tarea actual: {selected_focus_data.get('current_task', 'sin detalle')}")
+                st.write(f"- State: `{selected_focus_data.get('state', 'IDLE')}`")
+                st.write(f"- X position: `{selected_focus_data.get('x', 0.0):.1f}`")
+                st.write(f"- Current task: {selected_focus_data.get('current_task', 'no detail available')}")
                 if selected_focus_data.get("box_id"):
-                    st.write(f"- Caja activa: `{selected_focus_data['box_id']}`")
+                    st.write(f"- Active box: `{selected_focus_data['box_id']}`")
                 if selected_focus_data.get("destination"):
-                    st.write(f"- Destino logico: `{selected_focus_data['destination']}`")
+                    st.write(f"- Logical destination: `{selected_focus_data['destination']}`")
                 if selected_focus_data.get("from_position"):
-                    st.write(f"- Sale desde: `{selected_focus_data['from_position']}`")
+                    st.write(f"- Moving from: `{selected_focus_data['from_position']}`")
                 if selected_focus_data.get("to_position"):
-                    st.write(f"- Va hacia: `{selected_focus_data['to_position']}`")
+                    st.write(f"- Moving to: `{selected_focus_data['to_position']}`")
                 if selected_focus_data.get("next_task"):
-                    st.write(f"- Siguiente tarea: {selected_focus_data['next_task']}")
+                    st.write(f"- Next task: {selected_focus_data['next_task']}")
                 if selected_focus_data.get("reason"):
-                    st.write(f"- Motivo: {selected_focus_data['reason']}")
+                    st.write(f"- Reason: {selected_focus_data['reason']}")
                 if selected_focus_data.get("decision"):
-                    st.write(f"- Decision: {selected_focus_data['decision']}")
+                    st.write(f"- Decision rule: {selected_focus_data['decision']}")
         else:
             st.write("No shuttle selected.")
 
@@ -782,19 +782,6 @@ with col5:
     st.plotly_chart(build_shuttle_chart(df_up_to), use_container_width=True)
 with col6:
     st.plotly_chart(build_pending_chart(df_up_to), use_container_width=True)
-
-# â”€â”€â”€ LIVE PLAYBACK LOOP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-if play_btn:
-    start_idx = st.session_state.get('playback_idx', 0)
-    progress_bar = st.progress(start_idx / len(df))
-
-    for i in range(start_idx, len(df)):
-        st.session_state.playback_idx = i
-        progress_bar.progress(i / (len(df) - 1))
-        time.sleep(1.0 / playback_speed)
-
-    st.session_state.playback_idx = len(df) - 1
-    st.rerun()
 
 # â”€â”€â”€ FINAL SUMMARY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 st.markdown("---")
@@ -824,11 +811,11 @@ with st.expander("Final Simulation Summary", expanded=False):
 
 # â”€â”€â”€ GEMINI AI ASSISTANT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 st.markdown("---")
-st.markdown("### Habla con el silo (Gemini AI)")
-st.markdown("Preguntale por el estado general del silo o por el shuttle que tengas seleccionado.")
+st.markdown("### Talk to the Warehouse (Gemini AI)")
+st.markdown("Ask about the overall warehouse state or about the shuttle you currently have selected.")
 if selected_focus_data.get("shuttle_id"):
     st.info(
-        f"El chat usara como foco principal el shuttle `{selected_focus_data['shuttle_id']}` y su tarea actual."
+        f"The chat will use shuttle `{selected_focus_data['shuttle_id']}` and its current task as the main focus."
     )
 
 if "chat_messages" not in st.session_state:
@@ -839,13 +826,13 @@ for message in st.session_state.chat_messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt := st.chat_input("Preguntale al silo (ej: 'Como vas de ocupacion?', 'Hay mucho trabajo pendiente?'):"):
+if prompt := st.chat_input("Ask the warehouse (for example: 'What is this shuttle doing?' or 'How full is the silo right now?'):"):
     st.session_state.chat_messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Analizando estado del silo..."):
+        with st.spinner("Analyzing warehouse state..."):
             try:
                 context = build_warehouse_context(
                     result,
@@ -864,5 +851,5 @@ if prompt := st.chat_input("Preguntale al silo (ej: 'Como vas de ocupacion?', 'H
                     algo_mode,
                 )
                 st.markdown(fallback_text)
-                st.caption(f"API no disponible ahora mismo: {str(e)}")
+                st.caption(f"API unavailable right now: {str(e)}")
                 st.session_state.chat_messages.append({"role": "assistant", "content": fallback_text})

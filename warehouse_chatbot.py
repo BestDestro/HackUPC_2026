@@ -42,26 +42,26 @@ load_local_env()
 
 ALGORITHM_EXPLANATIONS = {
     "Optimized (Parallel + Lookahead)": {
-        "summary": "Modo paralelo con lookahead dinamico y coordinacion entre shuttles.",
-        "storage": "Guarda las cajas cerca de la cabecera cuando conviene y reparte carga entre lineas.",
-        "pallet": "Abre pallets segun prioridad de throughput y disponibilidad real de cajas.",
-        "retrieval": "Coordina varios shuttles a la vez y penaliza bloqueos y recorridos caros.",
+        "summary": "Parallel mode with dynamic lookahead and coordinated shuttle decisions.",
+        "storage": "Keeps boxes near the head when useful and balances work across shuttle lanes.",
+        "pallet": "Opens pallets based on throughput priority and real box availability.",
+        "retrieval": "Coordinates multiple shuttles at once and penalizes blockers and expensive travel.",
     },
     "Naive (Legacy)": {
-        "summary": "Modo legacy mas secuencial, con decisiones locales y menos coordinacion global.",
-        "storage": "Guarda de forma mas simple, priorizando coste local del shuttle.",
-        "pallet": "Selecciona pallets con reglas mas directas y menos anticipacion.",
-        "retrieval": "Extrae de forma mas conservadora y con menor paralelismo.",
+        "summary": "Legacy mode with more sequential behavior, local decisions, and less global coordination.",
+        "storage": "Stores boxes with a simpler policy that prioritizes local shuttle cost.",
+        "pallet": "Selects pallets with more direct rules and less anticipation.",
+        "retrieval": "Retrieves more conservatively with lower parallelism.",
     },
 }
 
 
 SIM_MODE_EXPLANATIONS = {
     "Concurrent (Finite)": (
-        "Llega un lote finito de cajas y el sistema combina entrada y salida hasta completar el trabajo."
+        "A finite batch of boxes arrives and the system mixes inbound and outbound work until it finishes."
     ),
     "Continuous (Infinite Flow)": (
-        "Las cajas siguen entrando durante la ventana simulada y el sistema opera en flujo continuo."
+        "Boxes keep arriving during the simulated time window and the system runs as a continuous flow."
     ),
 }
 
@@ -70,10 +70,10 @@ def get_algorithm_explanation(mode_name: str) -> dict:
     return ALGORITHM_EXPLANATIONS.get(
         mode_name,
         {
-            "summary": "Configuracion sin descripcion registrada.",
-            "storage": "Sin detalle.",
-            "pallet": "Sin detalle.",
-            "retrieval": "Sin detalle.",
+            "summary": "Configuration with no registered description.",
+            "storage": "No detail available.",
+            "pallet": "No detail available.",
+            "retrieval": "No detail available.",
         },
     )
 
@@ -149,7 +149,7 @@ def build_system_prompt(context: str) -> str:
     return textwrap.dedent(
         f"""
         You are the voice of an automated warehouse silo for a hackathon demo.
-        Always answer in Spanish.
+        Always answer in English.
         Be concrete, operational, and specific.
         If a shuttle is selected, explain first:
         1. which shuttle it is,
@@ -202,7 +202,7 @@ def ask_gemini(question: str, context: str, api_key: Optional[str] = None, model
         "contents": [
             {
                 "role": "user",
-                "parts": [{"text": f"{prompt}\n\nPregunta del operador:\n{question}"}],
+                "parts": [{"text": f"{prompt}\n\nOperator question:\n{question}"}],
             }
         ],
         "generationConfig": {
@@ -240,12 +240,12 @@ def fallback_answer(question: str, focus_summary: str = "", algorithm_mode: str 
     alg = get_algorithm_explanation(algorithm_mode)
     if focus_summary:
         return (
-            "No he podido consultar la API ahora mismo, pero con el contexto en vivo te puedo resumir esto:\n\n"
+            "I could not reach the API right now, but using the live context I can still summarize this:\n\n"
             f"{focus_summary}\n\n"
-            f"Ademas, la logica activa es `{algorithm_mode}`: {alg['summary']}"
+            f"In addition, the active logic is `{algorithm_mode}`: {alg['summary']}"
         )
 
     return (
-        "No he podido consultar la API ahora mismo. "
-        f"La logica activa es `{algorithm_mode}` y su idea general es: {alg['summary']}"
+        "I could not reach the API right now. "
+        f"The active logic is `{algorithm_mode}` and its overall idea is: {alg['summary']}"
     )
