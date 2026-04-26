@@ -68,6 +68,8 @@ class ConcurrentManager:
         # Snapshots for dashboard visualization
         self.snapshots: List[dict] = []
         self._last_snapshot_time = -999.0
+        self.trace_events: List[dict] = []
+        self._event_id = 0
 
     # =========================================================================
     # SHUTTLE HELPERS
@@ -77,10 +79,77 @@ class ConcurrentManager:
         """Cost of moving a shuttle from from_x to to_x."""
         return HANDLING_TIME + abs(from_x - to_x)
 
+    def _position_label(self, pos: Optional[Position]) -> str:
+        if pos is None:
+            return "HEAD"
+        return f"A{pos.aisle}-S{pos.side}-X{pos.x}-Y{pos.y}-Z{pos.z}"
+
+    def _record_trace_event(
+        self,
+        event_type: str,
+        box: Box,
+        key: tuple,
+        start_time: float,
+        end_time: float,
+        box_from_x: int,
+        box_to_x: int,
+        shuttle_from_x: int,
+        shuttle_to_x: int,
+        from_position: Optional[Position],
+        to_position: Optional[Position],
+        reason: str,
+        decision: str,
+        related_box_id: Optional[str] = None,
+    ):
+        self._event_id += 1
+        aisle, y = key
+        self.trace_events.append({
+            "event_id": self._event_id,
+            "event_type": event_type,
+            "box_id": box.box_id,
+            "destination": box.destination,
+            "related_box_id": related_box_id or "",
+            "shuttle_id": f"A{aisle}_Y{y}",
+            "aisle": aisle,
+            "y": y,
+            "start_time": round(start_time, 3),
+            "end_time": round(end_time, 3),
+            "duration": round(max(0.0, end_time - start_time), 3),
+            "start_min": round(start_time / 60.0, 3),
+            "end_min": round(end_time / 60.0, 3),
+            "box_from_x": box_from_x,
+            "box_to_x": box_to_x,
+            "shuttle_from_x": shuttle_from_x,
+            "shuttle_to_x": shuttle_to_x,
+            "from_position": self._position_label(from_position),
+            "to_position": self._position_label(to_position),
+            "reason": reason,
+            "decision": decision,
+        })
+
     def register_initial_boxes(self, boxes: dict, stored_at: float = 0.0):
-        """Track pre-loaded boxes as already inside the silo."""
-        for box_id in boxes:
+        """Track pre-loaded boxes as already inside the silo and expose them to playback."""
+        for box_id, box in boxes.items():
             self.box_entered_silo_at[box_id] = stored_at
+            pos = box.position
+            if pos is None:
+                continue
+            key = (pos.aisle, pos.y)
+            self._record_trace_event(
+                event_type="INITIAL",
+                box=box,
+                key=key,
+                start_time=stored_at,
+                end_time=stored_at,
+                box_from_x=pos.x,
+                box_to_x=pos.x,
+                shuttle_from_x=self.shuttle_x.get(key, 0),
+                shuttle_to_x=self.shuttle_x.get(key, 0),
+                from_position=pos,
+                to_position=pos,
+                reason="Box loaded from the initial CSV state.",
+                decision="Initial state before live playback begins.",
+            )
 
     def _record_box_stored(self, box: Box, stored_at: float):
         self.box_entered_silo_at[box.box_id] = stored_at
@@ -105,19 +174,38 @@ class ConcurrentManager:
         """Execute a store operation. Returns completion time."""
         key = (pos.aisle, pos.y)
         cur_x = self.shuttle_x[key]
+        start_time = max(t, self.shuttle_free_at[key])
 
         # Move to head (pick box), then to position (drop box)
         t_to_head = self._shuttle_move_cost(key, cur_x, 0)
         t_to_pos = self._shuttle_move_cost(key, 0, pos.x)
         total = t_to_head + t_to_pos
 
-        finish_time = max(t, self.shuttle_free_at[key]) + total
+        finish_time = start_time + total
         self.shuttle_free_at[key] = finish_time
         self.shuttle_x[key] = pos.x
 
         self.silo.place_box(box, pos)
         self._record_box_stored(box, finish_time)
         self.boxes_stored += 1
+        self._record_trace_event(
+            event_type="STORE",
+            box=box,
+            key=key,
+            start_time=start_time,
+            end_time=finish_time,
+            box_from_x=0,
+            box_to_x=pos.x,
+            shuttle_from_x=cur_x,
+            shuttle_to_x=pos.x,
+            from_position=None,
+            to_position=pos,
+            reason=(
+                "The active storage heuristic selected this slot using shuttle availability, "
+                "travel cost, and destination grouping."
+            ),
+            decision="The box enters from HEAD and is stored in the best free slot available now.",
+        )
         return finish_time
 
     def _execute_retrieve(self, box: Box, t: float) -> float:
@@ -125,8 +213,8 @@ class ConcurrentManager:
         pos = box.position
         key = (pos.aisle, pos.y)
         cur_x = self.shuttle_x[key]
-        start_time = max(t, self.shuttle_free_at[key])
         total = 0.0
+        time_cursor = max(t, self.shuttle_free_at[key])
 
         # Handle Z=2 blockage
         if self.silo.is_blocked(pos):
@@ -140,13 +228,34 @@ class ConcurrentManager:
                         # Send blocking box directly to output
                         t_pick = self._shuttle_move_cost(key, cur_x, pos.x)
                         t_drop = self._shuttle_move_cost(key, pos.x, 0)
+                        event_start = time_cursor
+                        event_end = time_cursor + t_pick + t_drop
                         total += t_pick + t_drop
                         self.silo.remove_box(blocking_box.box_id)
                         pallet.retrieved.append(blocking_box)
                         blocking_box.position = None
-                        self._record_box_retrieved(blocking_box, start_time + total)
+                        self._record_box_retrieved(blocking_box, event_end)
                         self.boxes_retrieved += 1
+                        self._record_trace_event(
+                            event_type="RETRIEVE_BLOCKER",
+                            box=blocking_box,
+                            key=key,
+                            start_time=event_start,
+                            end_time=event_end,
+                            box_from_x=pos.x,
+                            box_to_x=0,
+                            shuttle_from_x=cur_x,
+                            shuttle_to_x=0,
+                            from_position=Position(pos.aisle, pos.side, pos.x, pos.y, 1),
+                            to_position=None,
+                            reason=(
+                                "The target box was behind a front box that also belonged to an active pallet."
+                            ),
+                            decision="The blocking box was sent directly to output instead of being relocated.",
+                            related_box_id=box.box_id,
+                        )
                         cur_x = 0
+                        time_cursor = event_end
                         sent_to_pallet = True
                         break
 
@@ -161,17 +270,39 @@ class ConcurrentManager:
                     if nearest:
                         t_pick = self._shuttle_move_cost(key, cur_x, pos.x)
                         t_drop = self._shuttle_move_cost(key, pos.x, nearest.x)
+                        event_start = time_cursor
+                        event_end = time_cursor + t_pick + t_drop
                         total += t_pick + t_drop
+                        from_position = Position(pos.aisle, pos.side, pos.x, pos.y, 1)
                         self.silo.remove_box(blocking_box.box_id)
                         self.silo.place_box(blocking_box, nearest)
+                        self._record_trace_event(
+                            event_type="RELOCATE",
+                            box=blocking_box,
+                            key=key,
+                            start_time=event_start,
+                            end_time=event_end,
+                            box_from_x=pos.x,
+                            box_to_x=nearest.x,
+                            shuttle_from_x=cur_x,
+                            shuttle_to_x=nearest.x,
+                            from_position=from_position,
+                            to_position=nearest,
+                            reason="The target box was blocked and needed a clear path for retrieval.",
+                            decision="The front box was relocated to the nearest available slot.",
+                            related_box_id=box.box_id,
+                        )
                         cur_x = nearest.x
+                        time_cursor = event_end
 
         # Pick target box and bring to head
         t_to_box = self._shuttle_move_cost(key, cur_x, pos.x)
         t_to_head = self._shuttle_move_cost(key, pos.x, 0)
+        event_start = time_cursor
+        event_end = time_cursor + t_to_box + t_to_head
         total += t_to_box + t_to_head
 
-        finish_time = start_time + total
+        finish_time = event_end
         self.shuttle_free_at[key] = finish_time
         self.shuttle_x[key] = 0
 
@@ -179,6 +310,24 @@ class ConcurrentManager:
         box.position = None
         self._record_box_retrieved(box, finish_time)
         self.boxes_retrieved += 1
+        self._record_trace_event(
+            event_type="RETRIEVE",
+            box=box,
+            key=key,
+            start_time=event_start,
+            end_time=event_end,
+            box_from_x=pos.x,
+            box_to_x=0,
+            shuttle_from_x=cur_x,
+            shuttle_to_x=0,
+            from_position=pos,
+            to_position=None,
+            reason=(
+                "The active retrieval logic prioritized this box using shuttle cost, "
+                "pallet urgency, and blocking penalties."
+            ),
+            decision="The box was retrieved to HEAD because it was an efficient active pallet candidate.",
+        )
         return finish_time
 
     # =========================================================================
@@ -500,6 +649,7 @@ class ConcurrentManager:
 
         result = self._build_metrics(incoming_boxes, pending_input)
         result['snapshots'] = self.snapshots
+        result['trace_events'] = self.trace_events
         return result
 
     def _take_snapshot(self, pending_input):
@@ -938,6 +1088,7 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
         "mechanical_failures": getattr(manager, 'total_mechanical_failures', 0),
         "shuttle_avg_time": f"{avg_stime:.1f}s",
         "snapshots": manager.snapshots,
+        "trace_events": manager.trace_events,
     }
 
     if verbose:
