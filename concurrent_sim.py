@@ -818,7 +818,8 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
                    arrival_rate: int = BOX_ARRIVAL_RATE,
                    seed: int = 42,
                    verbose: bool = True,
-                   algo_mode: str = "Optimized") -> dict:
+                   algo_mode: str = "Optimized",
+                   simulate_failures: bool = False) -> dict:
     """
     CONTINUOUS FLOW simulation — the real operational scenario.
 
@@ -863,7 +864,12 @@ def run_continuous(csv_path: str, duration_hours: float = 8.0,
     # ── Initialize ────────────────────────────────────────────────────────────
     silo = Silo()
     shuttle_mgr = ShuttleManager()
-    manager = ConcurrentManager(silo, shuttle_mgr)
+    
+    if simulate_failures:
+        from extra_modules import FaultyConcurrentManager
+        manager = FaultyConcurrentManager(silo, shuttle_mgr, failure_rate=0.05, retry_penalty=12.0)
+    else:
+        manager = ConcurrentManager(silo, shuttle_mgr)
 
     if verbose:
         print(f"\n--- Loading initial silo state ---")

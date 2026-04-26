@@ -1,4 +1,4 @@
-"""
+﻿"""
 dashboard.py - Streamlit live dashboard for the logistics simulation.
 
 Run: streamlit run dashboard.py
@@ -18,19 +18,19 @@ from shuttle import ShuttleManager
 from concurrent_sim import ConcurrentManager, BOX_INTERVAL, run_continuous
 from csv_loader import load_silo_from_csv
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # PAGE CONFIG
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 st.set_page_config(
     page_title="Hack the Flow - Silo Dashboard",
-    page_icon="📦",
+    page_icon="ðŸ“¦",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # CUSTOM CSS
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
@@ -119,17 +119,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # SIMULATION RUNNER (cached)
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 METRICS_VERSION = 5
 
 @st.cache_data(show_spinner="Running simulation...")
-def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_mode, metrics_version):
+def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_mode, simulate_failures, metrics_version):
     """Run the selected simulation mode and return snapshots."""
     if mode == "Continuous":
         return run_continuous(csv_path, num_destinations=num_destinations,
-                              duration_hours=duration_hours, arrival_rate=arrival_rate, verbose=True, algo_mode=algo_mode)
+                              duration_hours=duration_hours, arrival_rate=arrival_rate, verbose=True, algo_mode=algo_mode, simulate_failures=simulate_failures)
     else:
         random.seed(seed)
         silo = Silo()
@@ -158,9 +158,9 @@ def run_simulation(mode, csv_path, num_incoming, num_destinations, duration_hour
 
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # CHART BUILDERS
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def format_duration(seconds):
     if seconds is None:
         return "N/A"
@@ -420,9 +420,9 @@ def extract_selected_shuttle(plotly_state):
     return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # SIDEBAR
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 CSV_SCENARIOS = {
     "Inicial entregado (~12% lleno)": "silo-semi-empty.csv",
     "Medio lleno (50%)": "silo-half-full.csv",
@@ -452,25 +452,26 @@ with st.sidebar:
 
     seed = st.number_input("Random Seed", value=42, step=1)
     playback_speed = st.slider("Playback Speed", 1, 50, 10, help="Snapshots per second during playback")
+    simulate_failures = st.checkbox("âš™ï¸ Simular Fallos MecÃ¡nicos (5%)", value=False, help="Inyecta atascos aleatorios (12s de penalizaciÃ³n por retry) en los shuttles.")
 
     st.markdown("---")
-    run_btn = st.button("Run Simulation", type="primary", width='stretch')
+    run_btn = st.button("Run Simulation", type="primary")
     st.markdown("---")
     
     st.markdown("**Algorithms Info:**")
     if "Optimized" in algo_mode:
-        st.markdown("- **Lookahead:** Dynamic (≥8 boxes)\n- **Output:** 32 Shuttles Parallel\n- **Gate:** Competitive\n- **State:** Hash Maps O(1)")
+        st.markdown("- **Lookahead:** Dynamic (â‰¥8 boxes)\n- **Output:** 32 Shuttles Parallel\n- **Gate:** Competitive\n- **State:** Hash Maps O(1)")
     else:
         st.markdown("- **Lookahead:** Strict (12 boxes)\n- **Output:** Sequential (1 Shuttle max/tick)\n- **Gate:** Occupancy > 50%\n- **State:** Hash Maps O(1)")
 
     st.markdown("---")
-    st.markdown("**🤖 Integración IA (Activa)**")
+    st.markdown("**ðŸ¤– IntegraciÃ³n IA (Activa)**")
     st.success("Conectado a Google Gemini")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # MAIN DASHBOARD
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 st.markdown('<h1 class="main-title">Hack the Flow - Silo Dashboard</h1>', unsafe_allow_html=True)
 st.markdown('<p class="subtitle">Real-time visualization of the logistics simulation</p>',
             unsafe_allow_html=True)
@@ -491,7 +492,7 @@ if needs_rerun:
     with st.spinner(f"Running {sim_mode}..."):
         mode_str = "Continuous" if "Continuous" in sim_mode else "Concurrent"
         algo_str = "Naive" if "Naive" in algo_mode else "Optimized"
-        result = run_simulation(mode_str, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_str, METRICS_VERSION)
+        result = run_simulation(mode_str, csv_path, num_incoming, num_destinations, duration_hours, arrival_rate, seed, algo_str, simulate_failures, METRICS_VERSION)
         st.session_state.sim_result = result
         st.session_state.metrics_version = METRICS_VERSION
         st.session_state.playback_idx = 0
@@ -505,7 +506,7 @@ if not snapshots:
 
 df = pd.DataFrame(snapshots)
 
-# ─── LIVE PLAYBACK ──────────────────────────────────────────────────────────
+# â”€â”€â”€ LIVE PLAYBACK â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 st.markdown("---")
 
 # Playback controls
@@ -514,7 +515,6 @@ with col_ctrl1:
     play_btn = st.button("Play", width='stretch')
 with col_ctrl3:
     reset_btn = st.button("Reset", width='stretch')
-
 with col_ctrl2:
     frame_idx = st.slider("Timeline", 0, len(df) - 1,
                            st.session_state.get('playback_idx', len(df) - 1),
@@ -539,7 +539,7 @@ elif has_pending or current['boxes_stored'] < result.get('boxes_arrived', 0):
 else:
     phase_html = '<span class="phase-badge-output">OUTPUT ONLY</span>'
 
-# ─── KPI ROW ────────────────────────────────────────────────────────────────
+# â”€â”€â”€ KPI ROW â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 st.markdown(f"#### Sim Time: **{current['time_min']:.1f} min** &nbsp; {phase_html}",
             unsafe_allow_html=True)
 
@@ -611,32 +611,30 @@ else:
         else:
             st.write("No shuttle selected.")
 
-# ─── CHARTS ─────────────────────────────────────────────────────────────────
+# â”€â”€â”€ CHARTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 st.markdown("---")
 
 col1, col2 = st.columns(2)
 with col1:
-    st.plotly_chart(build_throughput_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_throughput_chart(df_up_to), use_container_width=True)
 with col2:
-    st.plotly_chart(build_occupancy_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_occupancy_chart(df_up_to), use_container_width=True)
 
 col3, col4 = st.columns(2)
 with col3:
-    st.plotly_chart(build_pallets_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_pallets_chart(df_up_to), use_container_width=True)
 with col4:
-    st.plotly_chart(build_aisle_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_aisle_chart(df_up_to), use_container_width=True)
 
 col5, col6 = st.columns(2)
 with col5:
-    st.plotly_chart(build_shuttle_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_shuttle_chart(df_up_to), use_container_width=True)
 with col6:
-    st.plotly_chart(build_pending_chart(df_up_to), width='stretch')
+    st.plotly_chart(build_pending_chart(df_up_to), use_container_width=True)
 
-# ─── LIVE PLAYBACK LOOP ────────────────────────────────────────────────────
+# â”€â”€â”€ LIVE PLAYBACK LOOP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 if play_btn:
     start_idx = st.session_state.get('playback_idx', 0)
-    kpi_placeholder = st.empty()
-    chart_placeholder = st.empty()
     progress_bar = st.progress(start_idx / len(df))
 
     for i in range(start_idx, len(df)):
@@ -647,7 +645,7 @@ if play_btn:
     st.session_state.playback_idx = len(df) - 1
     st.rerun()
 
-# ─── FINAL SUMMARY ─────────────────────────────────────────────────────────
+# â”€â”€â”€ FINAL SUMMARY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 st.markdown("---")
 with st.expander("Final Simulation Summary", expanded=False):
     summary_cols = st.columns(3)
@@ -668,12 +666,15 @@ with st.expander("Final Simulation Summary", expanded=False):
     with summary_cols[2]:
         st.markdown("**System**")
         st.write(f"- Relocations: {result.get('total_relocations', 'N/A')}")
+        if result.get('mechanical_failures', 0) > 0:
+            st.write(f"- Mech. Failures: {result.get('mechanical_failures', 0)}")
         st.write(f"- Remaining in silo: {result.get('remaining_in_silo', 'N/A')}")
+        st.write(f"- Shuttle max time: {result.get('shuttle_max_time', 'N/A')}")
 
-# ─── GEMINI AI ASSISTANT ───────────────────────────────────────────────────
+# â”€â”€â”€ GEMINI AI ASSISTANT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 st.markdown("---")
-st.markdown("### 🤖 Habla con el Silo (Gemini AI)")
-st.markdown("Pregúntale a la IA sobre su estado actual, qué está haciendo o si detecta algún cuello de botella.")
+st.markdown("### ðŸ¤– Habla con el Silo (Gemini AI)")
+st.markdown("PregÃºntale a la IA sobre su estado actual, quÃ© estÃ¡ haciendo o si detecta algÃºn cuello de botella.")
 
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
@@ -683,7 +684,7 @@ for message in st.session_state.chat_messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt := st.chat_input("Pregúntale al Silo (ej: '¿Cómo vas de ocupación?', '¿Hay mucho trabajo pendiente?'):"):
+if prompt := st.chat_input("PregÃºntale al Silo (ej: 'Â¿CÃ³mo vas de ocupaciÃ³n?', 'Â¿Hay mucho trabajo pendiente?'):"):
     st.session_state.chat_messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -696,17 +697,17 @@ if prompt := st.chat_input("Pregúntale al Silo (ej: '¿Cómo vas de ocupación?
                 
                 # Context generation
                 context = f"""
-                Eres la IA integrada en un Silo Logístico Automatizado avanzado gestionando 32 shuttles robóticos.
-                Debes responder a las preguntas del operador de forma profesional, técnica y muy breve (máximo 2-3 frases), hablando en primera persona ("Tengo...", "He almacenado...").
+                Eres la IA integrada en un Silo LogÃ­stico Automatizado avanzado gestionando 32 shuttles robÃ³ticos.
+                Debes responder a las preguntas del operador de forma profesional, tÃ©cnica y muy breve (mÃ¡ximo 2-3 frases), hablando en primera persona ("Tengo...", "He almacenado...").
                 
-                Métricas en tiempo real (Tiempo Simulado: {current['time_min']:.1f} min):
+                MÃ©tricas en tiempo real (Tiempo Simulado: {current['time_min']:.1f} min):
                 - Cajas guardadas en total: {int(current['boxes_stored'])}
-                - Cajas extraídas en total: {int(current['boxes_retrieved'])}
-                - Ocupación física: {current['occupancy_pct']:.1f}% de 7680 slots
+                - Cajas extraÃ­das en total: {int(current['boxes_retrieved'])}
+                - OcupaciÃ³n fÃ­sica: {current['occupancy_pct']:.1f}% de 7680 slots
                 - Cajas pendientes de procesar en entrada: {int(current['pending_input'])}
-                - Tareas de reubicación realizadas (desatascos): {int(current['relocations'])}
+                - Tareas de reubicaciÃ³n realizadas (desatascos): {int(current['relocations'])}
                 - Pallets de salida completados: {int(current['pallets_completed'])}
-                - Estrategia algorítmica activa: {algo_mode}
+                - Estrategia algorÃ­tmica activa: {algo_mode}
                 
                 El operador te ha preguntado:
                 """
@@ -719,4 +720,4 @@ if prompt := st.chat_input("Pregúntale al Silo (ej: '¿Cómo vas de ocupación?
                 st.markdown(response.text)
                 st.session_state.chat_messages.append({"role": "assistant", "content": response.text})
             except Exception as e:
-                st.error(f"Error de conexión con la IA: {str(e)}")
+                st.error(f"Error de conexiÃ³n con la IA: {str(e)}")
